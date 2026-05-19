@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import numpy as np
 
 from ind_vias_perception.common.types import ObjectClass
@@ -91,3 +92,10 @@ def test_postprocess_accepts_rows_without_objectness_score():
     assert len(detections) == 1
     assert detections[0].label == ObjectClass.CAR
     assert abs(detections[0].confidence - 0.8) < 1e-6
+
+
+def test_missing_model_raises_clear_error(tmp_path):
+    missing_model = tmp_path / "missing_detector.onnx"
+
+    with pytest.raises(FileNotFoundError, match="ONNX detector model not found"):
+        ONNXDetectionHead(model_path=missing_model)
