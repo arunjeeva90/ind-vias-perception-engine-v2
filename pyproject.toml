@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ind-vias-perception"
+version = "0.2.1"
+description = "IND-VIAS Metric Monocular ADAS Perception Engine v2.1 atomic workspace"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "opencv-python>=4.8", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "ruff>=0.4", "mypy>=1.8"]
+onnx = ["onnxruntime>=1.17"]
+torch = ["torch>=2.2", "torchvision>=0.17"]
+
+[project.scripts]
+ind-vias-run = "ind_vias_perception.apps.run_demo:main"
+ind-vias-inspect = "ind_vias_perception.apps.inspect_architecture:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -1,0 +1,44 @@
+camera:
+  fx_px: 1100.0
+  fy_px: 1100.0
+  cx_px: 640.0
+  cy_px: 360.0
+  height_m: 1.25
+  pitch_deg: 2.0
+  horizon_v_px: 374.0
+
+model:
+  backbone: mobilenetv4_hybrid_stub
+  neck: bifpn_stub
+  heads:
+    detection: dummy_detection
+    lane: dummy_lane
+    freespace: dummy_freespace
+    ground_contact: dummy_ground_contact
+    depth: dummy_depth
+    uncertainty: dummy_uncertainty
+    scene_quality: dummy_scene_quality
+    tsr: dummy_tsr
+
+classes:
+  - car
+  - truck
+  - bus
+  - motorcycle
+  - auto_rickshaw
+  - bicycle
+  - pedestrian
+  - animal
+
+runtime:
+  fps_nominal: 30
+  cais:
+    high_uncertainty: 0.55
+    critical_ttc_s: 3.0
+    high_complexity: 0.70
+
+safety:
+  strong_warning_confidence: 0.80
+  visual_only_confidence: 0.60
+  advisory_confidence: 0.30
+  aeb_two_frame_gate: true
