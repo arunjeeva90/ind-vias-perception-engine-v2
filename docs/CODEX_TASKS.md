@@ -1,7 +1,36 @@
 # Codex Task Backlog
 
 ## Task 1: Replace dummy detection head
-Implement `perception/heads/detection/onnx_detection_head.py` with ONNXRuntime support, letterbox preprocessing, NMS, class mapping, and tests.
+Implement `perception/heads/detection/onnx_detection_head.py` with OpenCV DNN ONNX loading, letterbox preprocessing, NMS, class mapping, and tests.
+
+## Using a real ONNX detector
+
+This repo does not ship trained detector weights. To try a real detector, place your ONNX model at:
+
+```text
+models/weights/detector.onnx
+```
+
+Then switch `configs/default.yaml` to the ONNX backend:
+
+```yaml
+detection:
+  backend: onnx
+```
+
+Smoke-test that OpenCV DNN can find and load the model:
+
+```powershell
+python scripts/check_onnx_detector.py --config configs/default.yaml
+```
+
+Run image inference with visualization:
+
+```powershell
+python -m ind_vias_perception --image examples/test_frame.jpg --output examples/out_frame.jpg
+```
+
+Licensing note: third-party YOLO/ONNX models can carry GPL, AGPL, commercial, dataset, or export restrictions. Verify the model architecture, weights, labels, and training data licenses before integrating or distributing them.
 
 ## Task 2: Add MobileNetV4-Hybrid implementation
 Implement or integrate a permissively licensed MobileNetV4-Hybrid backbone behind `BackboneProtocol`. Do not copy incompatible code.

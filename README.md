@@ -21,6 +21,35 @@ This is a **production-style scaffold**, not a trained production model. It cont
 
 It does **not** include trained model weights for MobileNetV4, EfficientNet-Lite, YOLO, lane, depth, or DMS. Those must be trained or integrated later.
 
+## Using a real ONNX detector
+
+This repo does not ship trained detector weights. To try a real detector, place your ONNX model at:
+
+```text
+models/weights/detector.onnx
+```
+
+Then switch `configs/default.yaml` to the ONNX backend:
+
+```yaml
+detection:
+  backend: onnx
+```
+
+Smoke-test that OpenCV DNN can find and load the model:
+
+```powershell
+python scripts/check_onnx_detector.py --config configs/default.yaml
+```
+
+Run image inference with visualization:
+
+```powershell
+python -m ind_vias_perception --image examples/test_frame.jpg --output examples/out_frame.jpg
+```
+
+Licensing note: third-party YOLO/ONNX models can carry GPL, AGPL, commercial, dataset, or export restrictions. Verify the model architecture, weights, labels, and training data licenses before integrating or distributing them.
+
 ## Quick start on Windows PowerShell
 
 ```powershell
