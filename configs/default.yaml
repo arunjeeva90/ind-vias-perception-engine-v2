@@ -30,6 +30,22 @@ classes:
   - pedestrian
   - animal
 
+detection:
+  backend: dummy
+  onnx_model_path: models/weights/detector.onnx
+  input_size: [640, 640]
+  confidence_threshold: 0.25
+  nms_threshold: 0.45
+  class_names:
+    0: car
+    1: bus
+    2: truck
+    3: motorcycle
+    4: auto_rickshaw
+    5: pedestrian
+    6: cyclist
+    7: animal
+
 runtime:
   fps_nominal: 30
   cais:
