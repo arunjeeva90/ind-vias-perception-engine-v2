@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
 from ind_vias_perception.common.types import Detection, FramePacket
 
 
