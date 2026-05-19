@@ -30,6 +30,14 @@ Run image inference with visualization:
 python -m ind_vias_perception --image examples/test_frame.jpg --output examples/out_frame.jpg
 ```
 
+Add the debug overlay to show the active detection backend, track ids, distance, TTC, and the safety payload:
+
+```powershell
+python -m ind_vias_perception --image examples/test_frame.jpg --output examples/out_frame.jpg --debug-overlay
+```
+
+The ONNX detector is only a temporary 3A Object Detection provider. It is converted into existing `Detection` objects and still flows through `MetricMonocularPipeline`, ground-contact/depth/uncertainty, scale anchors, tracker, TTC, CAIS, Sentinel FSM, SafetyGate, and visualization.
+
 Licensing note: third-party YOLO/ONNX models can carry GPL, AGPL, commercial, dataset, or export restrictions. Verify the model architecture, weights, labels, and training data licenses before integrating or distributing them.
 
 ## Task 2: Add MobileNetV4-Hybrid implementation

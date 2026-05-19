@@ -15,6 +15,7 @@ def test_cli_parser_accepts_image_video_output_show_and_max_frames():
             "--output",
             "annotated.mp4",
             "--show",
+            "--debug-overlay",
             "--max-frames",
             "7",
         ]
@@ -24,4 +25,5 @@ def test_cli_parser_accepts_image_video_output_show_and_max_frames():
     assert args.video == "clip.mp4"
     assert args.output == "annotated.mp4"
     assert args.show is True
+    assert args.debug_overlay is True
     assert args.max_frames == 7

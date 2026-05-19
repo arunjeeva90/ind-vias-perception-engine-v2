@@ -12,13 +12,20 @@ _TEXT_BG_COLOR = (0, 0, 0)
 _STATUS_BG_COLOR = (32, 32, 32)
 
 
-def draw_perception_output(frame: np.ndarray, output: PerceptionOutput) -> np.ndarray:
+def draw_perception_output(
+    frame: np.ndarray,
+    output: PerceptionOutput,
+    detection_backend: str = "unknown",
+    debug_overlay: bool = False,
+) -> np.ndarray:
     annotated = frame.copy()
 
     for det in output.detections:
         x1, y1, x2, y2 = _clamp_bbox(det.bbox, annotated.shape)
         cv2.rectangle(annotated, (x1, y1), (x2, y2), _BOX_COLOR, 2)
         label = f"{det.label.value} {det.confidence:.2f}"
+        if debug_overlay and det.track_id is not None:
+            label += f" id:{det.track_id}"
         if det.distance_m is not None:
             label += f" {det.distance_m:.1f}m"
         if det.ttc_s is not None:
@@ -31,7 +38,10 @@ def draw_perception_output(frame: np.ndarray, output: PerceptionOutput) -> np.nd
         f"sentinel: {payload.get('sentinel_state', 'unknown')}",
         f"cais: {payload.get('cais_mode', output.mode)}",
     ]
-    _draw_status(annotated, " | ".join(status_parts))
+    if debug_overlay:
+        status_parts.insert(0, f"detection: {detection_backend}")
+        status_parts.append(f"safety: {payload}")
+    _draw_status(annotated, status_parts)
     return annotated
 
 
@@ -56,10 +66,15 @@ def _draw_label(frame: np.ndarray, text: str, origin: tuple[int, int]) -> None:
     cv2.putText(frame, text, (x + 4, y - 4), font, scale, _TEXT_COLOR, thickness, cv2.LINE_AA)
 
 
-def _draw_status(frame: np.ndarray, text: str) -> None:
+def _draw_status(frame: np.ndarray, lines: list[str]) -> None:
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = 0.6
     thickness = 1
-    (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
-    cv2.rectangle(frame, (0, 0), (min(frame.shape[1] - 1, text_w + 16), text_h + baseline + 14), _STATUS_BG_COLOR, -1)
-    cv2.putText(frame, text, (8, text_h + 6), font, scale, _TEXT_COLOR, thickness, cv2.LINE_AA)
+    sizes = [cv2.getTextSize(line, font, scale, thickness)[0] for line in lines]
+    line_height = max((height for _, height in sizes), default=12) + 8
+    panel_width = min(frame.shape[1] - 1, max((width for width, _ in sizes), default=0) + 16)
+    panel_height = min(frame.shape[0] - 1, line_height * len(lines) + 8)
+    cv2.rectangle(frame, (0, 0), (panel_width, panel_height), _STATUS_BG_COLOR, -1)
+    for idx, line in enumerate(lines):
+        y = 8 + line_height * (idx + 1) - 8
+        cv2.putText(frame, line, (8, y), font, scale, _TEXT_COLOR, thickness, cv2.LINE_AA)

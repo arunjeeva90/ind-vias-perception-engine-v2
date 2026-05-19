@@ -16,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=None)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument("--debug-overlay", action="store_true")
     return parser
 
 
@@ -24,13 +25,19 @@ def main() -> None:
 
     settings = load_settings(args.config)
     pipeline = build_pipeline(settings)
+    detection_backend = settings.raw.get("detection", {}).get("backend", "dummy")
 
     if args.image is not None:
         frame = cv2.imread(args.image)
         if frame is None:
             raise SystemExit(f"Could not read image: {args.image}")
         out = pipeline.process(FramePacket(frame=frame, timestamp_s=0.0, frame_id=0))
-        annotated = draw_perception_output(frame, out)
+        annotated = draw_perception_output(
+            frame,
+            out,
+            detection_backend=detection_backend,
+            debug_overlay=args.debug_overlay,
+        )
         print(out.safety_payload)
         if args.output is not None:
             if not cv2.imwrite(args.output, annotated):
@@ -63,7 +70,12 @@ def main() -> None:
         if not ok:
             break
         out = pipeline.process(FramePacket(frame=frame, timestamp_s=i / fps, frame_id=i))
-        annotated = draw_perception_output(frame, out)
+        annotated = draw_perception_output(
+            frame,
+            out,
+            detection_backend=detection_backend,
+            debug_overlay=args.debug_overlay,
+        )
         print(out.safety_payload)
         if args.output is not None:
             if writer is None:

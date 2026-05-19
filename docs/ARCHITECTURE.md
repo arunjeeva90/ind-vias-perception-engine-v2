@@ -42,3 +42,21 @@ Camera frame
 ## Production note
 
 The present code uses deterministic dummy components. Replace one component at a time with trained inference adapters while keeping interfaces stable.
+
+## ONNX detector PoC provider
+
+The ONNX detector is a temporary PoC provider for 3A Object Detection only; the production target remains a shared backbone with in-house heads. When `detection.backend: onnx` is enabled, the ONNX output is converted into existing `Detection` objects and then continues through the frozen IND-VIAS flow:
+
+```text
+Detection
+  -> ground-contact / depth / uncertainty
+  -> scale anchors
+  -> tracker
+  -> TTC
+  -> CAIS
+  -> Sentinel FSM
+  -> SafetyGate
+  -> visualization
+```
+
+It must not bypass `MetricMonocularPipeline`, tracker, TTC, CAIS, Sentinel FSM, or SafetyGate.

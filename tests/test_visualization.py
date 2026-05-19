@@ -12,6 +12,7 @@ def _sample_output() -> PerceptionOutput:
         label=ObjectClass.CAR,
         confidence=0.86,
         distance_m=12.5,
+        track_id=3,
         ttc_s=3.2,
     )
     return PerceptionOutput(
@@ -40,4 +41,19 @@ def test_visualization_changes_some_pixels():
 
     annotated = draw_perception_output(frame, _sample_output())
 
+    assert np.any(annotated != frame)
+
+
+def test_debug_overlay_preserves_image_shape_and_dtype():
+    frame = np.zeros((120, 200, 3), dtype=np.uint8)
+
+    annotated = draw_perception_output(
+        frame,
+        _sample_output(),
+        detection_backend="onnx",
+        debug_overlay=True,
+    )
+
+    assert annotated.shape == frame.shape
+    assert annotated.dtype == frame.dtype
     assert np.any(annotated != frame)
