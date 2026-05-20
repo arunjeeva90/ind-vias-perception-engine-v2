@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+
 import cv2
 from ind_vias_perception.common.types import FramePacket
 from ind_vias_perception.config.settings import load_settings
@@ -24,8 +26,9 @@ def main() -> None:
     args = build_parser().parse_args()
 
     settings = load_settings(args.config)
-    pipeline = build_pipeline(settings)
     detection_backend = settings.raw.get("detection", {}).get("backend", "dummy")
+    validate_detector_config(settings.raw)
+    pipeline = build_pipeline(settings)
 
     if args.image is not None:
         frame = cv2.imread(args.image)
@@ -96,6 +99,23 @@ def main() -> None:
         writer.release()
     if args.show:
         cv2.destroyAllWindows()
+
+
+def validate_detector_config(raw_settings: dict[str, object]) -> None:
+    detection_cfg = raw_settings.get("detection", {})
+    if not isinstance(detection_cfg, dict):
+        return
+    if detection_cfg.get("backend", "dummy") != "onnx":
+        return
+
+    model_path = Path(str(detection_cfg.get("onnx_model_path", "models/weights/detector.onnx")))
+    if model_path.exists():
+        return
+
+    raise SystemExit(
+        "ONNX detector model is missing. Place the ONNX model at "
+        "models/weights/detector.onnx or switch back to configs/default.yaml."
+    )
 
 
 if __name__ == "__main__":
