@@ -25,6 +25,16 @@ def test_ground_contact_fallback_uses_bbox_bottom_center():
     assert out[0].metadata["v_gc"] == 80.0
 
 
+def test_ground_contact_v_gc_never_exceeds_image_height_minus_one():
+    det = Detection(BBox2D(10, 20, 50, 130), ObjectClass.CAR, 0.9)
+    packet = FramePacket(frame=np.zeros((100, 100, 3), dtype=np.uint8), timestamp_s=0.0)
+
+    out = DummyGroundContactHead().forward([det], packet)
+
+    assert out[0].ground_contact == (30.0, 99)
+    assert out[0].metadata["v_gc"] == 99.0
+
+
 def test_ground_contact_distance_increases_closer_to_horizon():
     cal = CameraCalibration(1100, 1100, 624, 624, 1.25, 0.0, 640, min_distance_m=2.0, max_distance_m=120.0)
 

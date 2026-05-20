@@ -44,3 +44,20 @@ def test_missing_vehicle_config_defaults_to_zero_offset():
     settings = load_settings("configs/default.yaml")
 
     assert settings.vehicle.camera_to_front_bumper_offset_m == 0.0
+
+
+def test_phone_demo_1440_profile_loads():
+    settings = load_settings("configs/phone_demo_1440.yaml")
+
+    assert settings.camera.image_width == 1440
+    assert settings.camera.image_height == 1440
+    assert settings.camera.fy_px == 1100.0
+    assert settings.vehicle.camera_to_front_bumper_offset_m == 1.45
+
+    with open("configs/phone_demo_1440.yaml", "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    assert settings.camera.horizon_v_px == float(cfg["camera"]["horizon_y"])
+    assert cfg["semantic_priors"]["car"]["width_m"] == 1.75
+    assert cfg["semantic_priors"]["truck"]["height_m"] == 2.80
+    assert cfg["ego_corridor"]["enabled"] is True
+    assert cfg["ego_corridor"]["bottom_width_norm"] == 0.45

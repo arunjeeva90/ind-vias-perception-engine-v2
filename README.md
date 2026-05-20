@@ -60,6 +60,24 @@ The ONNX detector is only a temporary 3A Object Detection provider. It is conver
 
 Licensing note: third-party YOLO/ONNX models can carry GPL, AGPL, commercial, dataset, or export restrictions. Verify the model architecture, weights, labels, and training data licenses before integrating or distributing them.
 
+## Calibrating phone-mounted demo videos
+
+Phone videos need a rough ground-plane calibration before monocular distance numbers are useful. This repo includes a helper for demo tuning only; it does not claim production accuracy.
+
+For 1440x1440 phone footage, start from:
+
+```text
+configs/phone_demo_1440.yaml
+```
+
+Pick a frame with a visible target at a known camera-relative distance, note the target bounding box, then run:
+
+```powershell
+python scripts/tune_ground_distance.py --config configs/phone_demo_1440.yaml --image examples/test_frame.jpg --bbox 100,200,300,1000 --known-distance-m 10.0
+```
+
+The script prints the bbox bottom-center ground contact, current `Dcam`, current bumper-relative `Dbump` when `vehicle.camera_to_front_bumper_offset_m` is configured, plus suggested `fy` and `horizon_y` values. Use those suggestions to iterate on the demo config, then rerun the normal pipeline through `python -m ind_vias_perception`; the script is only an offline tuning aid and does not bypass `MetricMonocularPipeline`.
+
 ## Quick start on Windows PowerShell
 
 ```powershell

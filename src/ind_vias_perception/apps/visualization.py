@@ -17,8 +17,11 @@ def draw_perception_output(
     output: PerceptionOutput,
     detection_backend: str = "unknown",
     debug_overlay: bool = False,
+    ego_corridor: dict[str, object] | None = None,
 ) -> np.ndarray:
     annotated = frame.copy()
+    if debug_overlay and ego_corridor:
+        _draw_ego_corridor(annotated, ego_corridor)
 
     for det in output.detections:
         x1, y1, x2, y2 = _clamp_bbox(det.bbox, annotated.shape)
@@ -45,10 +48,12 @@ def draw_perception_output(
                 "gc: "
                 f"u={det.metadata.get('u_gc', 'n/a')} "
                 f"v={det.metadata.get('v_gc', 'n/a')} "
-                f"Dcam={_format_float(det.metadata.get('distance_camera_m'))}m "
+                f"Dg={_format_float(det.metadata.get('distance_ground_m'))}m "
+                f"Ds={_format_float(det.metadata.get('distance_semantic_m'))}m "
+                f"Df={_format_float(det.metadata.get('distance_fused_camera_m'))}m "
                 f"Dbump={_format_float(det.metadata.get('distance_bumper_m'))}m "
-                f"raw={_format_float(det.metadata.get('raw_distance_m'))}m "
-                f"filtered={_format_float(det.metadata.get('filtered_distance_m'))}m"
+                f"src={det.metadata.get('distance_source', 'n/a')} "
+                f"bbox_clipped={det.metadata.get('bbox_clipped', 'n/a')}"
             )
         status_parts.append(f"safety: {payload}")
     _draw_status(annotated, status_parts)
@@ -88,6 +93,27 @@ def _draw_status(frame: np.ndarray, lines: list[str]) -> None:
     for idx, line in enumerate(lines):
         y = 8 + line_height * (idx + 1) - 8
         cv2.putText(frame, line, (8, y), font, scale, _TEXT_COLOR, thickness, cv2.LINE_AA)
+
+
+def _draw_ego_corridor(frame: np.ndarray, cfg: dict[str, object]) -> None:
+    if not cfg.get("enabled", False):
+        return
+    height, width = frame.shape[:2]
+    center_x = float(cfg.get("center_x_norm", 0.5)) * width
+    top_y = float(cfg.get("top_y_norm", 0.45)) * height
+    bottom_y = float(cfg.get("bottom_y_norm", 1.0)) * height
+    top_w = float(cfg.get("top_width_norm", 0.18)) * width
+    bottom_w = float(cfg.get("bottom_width_norm", 0.45)) * width
+    polygon = np.array(
+        [
+            [center_x - top_w * 0.5, top_y],
+            [center_x + top_w * 0.5, top_y],
+            [center_x + bottom_w * 0.5, bottom_y],
+            [center_x - bottom_w * 0.5, bottom_y],
+        ],
+        dtype=np.int32,
+    )
+    cv2.polylines(frame, [polygon], isClosed=True, color=(0, 180, 255), thickness=2)
 
 
 def _format_float(value: object) -> str:

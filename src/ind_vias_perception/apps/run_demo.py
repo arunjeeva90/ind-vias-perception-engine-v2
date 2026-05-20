@@ -27,6 +27,7 @@ def main() -> None:
 
     settings = load_settings(args.config)
     detection_backend = settings.raw.get("detection", {}).get("backend", "dummy")
+    ego_corridor = settings.raw.get("ego_corridor", {})
     validate_detector_config(settings.raw)
     pipeline = build_pipeline(settings)
     if hasattr(pipeline.detection_head, "debug"):
@@ -42,6 +43,7 @@ def main() -> None:
             out,
             detection_backend=detection_backend,
             debug_overlay=args.debug_overlay,
+            ego_corridor=ego_corridor,
         )
         print(out.safety_payload)
         if args.output is not None:
@@ -80,6 +82,7 @@ def main() -> None:
             out,
             detection_backend=detection_backend,
             debug_overlay=args.debug_overlay,
+            ego_corridor=ego_corridor,
         )
         print(out.safety_payload)
         if args.output is not None:

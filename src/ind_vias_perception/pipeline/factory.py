@@ -40,6 +40,7 @@ def build_detection_head(settings: Settings):
 
 def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
     cais_cfg = settings.raw.get("runtime", {}).get("cais", {})
+    semantic_priors = settings.raw.get("semantic_priors", {})
     return MetricMonocularPipeline(
         settings=settings,
         backbone=MobileNetV4HybridStub(),
@@ -53,9 +54,9 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
         scene_quality_head=DummySceneQualityHead(),
         tsr_head=DummyTSRHead(),
         geometric_anchor=GeometricGroundContactAnchor(),
-        semantic_anchor=SemanticObjectSizeAnchor(),
+        semantic_anchor=SemanticObjectSizeAnchor(semantic_priors),
         tracker=SimpleDistanceTracker(),
         cais=CAISController(**cais_cfg),
         sentinel=SentinelFSM(),
-        safety_gate=SafetyGate(),
+        safety_gate=SafetyGate(settings.raw.get("ego_corridor", {})),
     )

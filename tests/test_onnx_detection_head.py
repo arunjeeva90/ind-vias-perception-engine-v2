@@ -174,3 +174,44 @@ def test_yolov8_coco_subset_filters_unmapped_classes():
     detections = head.postprocess(output, meta)
 
     assert detections == []
+
+
+def test_bbox_exceeding_image_bottom_is_clipped():
+    head = _coco_head()
+    _, meta = letterbox(np.zeros((100, 100, 3), dtype=np.uint8), (640, 640))
+    row = np.zeros((1, 84), dtype=np.float32)
+    row[0, :4] = [320, 650, 160, 100]
+    row[0, 4 + 2] = 0.9
+
+    detections = head.postprocess(row, meta)
+
+    assert len(detections) == 1
+    assert detections[0].bbox.y2 == 99.0
+    assert detections[0].metadata["bbox_clipped"] is True
+
+
+def test_bbox_exceeding_left_and_right_bounds_is_clipped():
+    head = _coco_head()
+    _, meta = letterbox(np.zeros((100, 100, 3), dtype=np.uint8), (640, 640))
+    row = np.zeros((1, 84), dtype=np.float32)
+    row[0, :4] = [320, 320, 900, 160]
+    row[0, 4 + 2] = 0.9
+
+    detections = head.postprocess(row, meta)
+
+    assert len(detections) == 1
+    assert detections[0].bbox.x1 == 0.0
+    assert detections[0].bbox.x2 == 99.0
+    assert detections[0].metadata["bbox_clipped"] is True
+
+
+def test_invalid_negative_size_box_is_rejected():
+    head = _coco_head()
+    _, meta = letterbox(np.zeros((100, 100, 3), dtype=np.uint8), (640, 640))
+    row = np.zeros((1, 84), dtype=np.float32)
+    row[0, :4] = [320, 320, -20, 160]
+    row[0, 4 + 2] = 0.9
+
+    detections = head.postprocess(row, meta)
+
+    assert detections == []

@@ -1,0 +1,89 @@
+camera:
+  image_width: 1440
+  image_height: 1440
+  fx: 1100.0
+  fy: 1100.0
+  cx: 720.0
+  cy: 720.0
+  camera_height_m: 1.25
+  pitch_deg: 0.0
+  horizon_y: 980
+  min_distance_m: 2.0
+  max_distance_m: 120.0
+
+model:
+  backbone: mobilenetv4_hybrid_stub
+  neck: bifpn_stub
+  heads:
+    detection: dummy_detection
+    lane: dummy_lane
+    freespace: dummy_freespace
+    ground_contact: dummy_ground_contact
+    depth: dummy_depth
+    uncertainty: dummy_uncertainty
+    scene_quality: dummy_scene_quality
+    tsr: dummy_tsr
+
+classes:
+  - car
+  - truck
+  - bus
+  - motorcycle
+  - bicycle
+  - pedestrian
+
+detection:
+  backend: onnx
+  onnx_model_path: models/weights/detector.onnx
+  input_size: [640, 640]
+  confidence_threshold: 0.25
+  nms_threshold: 0.45
+  class_names:
+    0: pedestrian
+    1: cyclist
+    2: car
+    3: motorcycle
+    5: bus
+    7: truck
+
+vehicle:
+  camera_to_front_bumper_offset_m: 1.45
+
+semantic_priors:
+  car:
+    width_m: 1.75
+    height_m: 1.50
+  truck:
+    width_m: 2.50
+    height_m: 2.80
+  bus:
+    width_m: 2.50
+    height_m: 3.00
+  pedestrian:
+    height_m: 1.70
+  motorcycle:
+    width_m: 0.80
+    height_m: 1.40
+  cyclist:
+    height_m: 1.70
+
+ego_corridor:
+  enabled: true
+  center_x_norm: 0.5
+  bottom_width_norm: 0.45
+  top_width_norm: 0.18
+  top_y_norm: 0.45
+  bottom_y_norm: 1.0
+
+runtime:
+  fps_nominal: 30
+  cais:
+    high_uncertainty: 0.55
+    critical_ttc_s: 3.0
+    high_complexity: 0.70
+
+safety:
+  strong_warning_confidence: 0.80
+  visual_only_confidence: 0.60
+  advisory_confidence: 0.30
+  aeb_two_frame_gate: true

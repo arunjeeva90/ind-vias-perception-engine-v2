@@ -26,6 +26,7 @@ class DecodedCandidate:
     box: list[int]
     confidence: float
     class_id: int
+    bbox_clipped: bool
 
 
 class ONNXDetectionHead:
@@ -82,6 +83,7 @@ class ONNXDetectionHead:
         boxes: list[list[int]] = []
         confidences: list[float] = []
         class_ids: list[int] = []
+        clipped_flags: list[bool] = []
         raw_count = len(rows)
         after_confidence_count = 0
         after_class_count = 0
@@ -103,6 +105,7 @@ class ONNXDetectionHead:
             boxes.append(decoded.box)
             confidences.append(decoded.confidence)
             class_ids.append(decoded.class_id)
+            clipped_flags.append(decoded.bbox_clipped)
 
         nms_indices = []
         if boxes:
@@ -129,13 +132,17 @@ class ONNXDetectionHead:
             return []
         detections: list[Detection] = []
         for index in flat_indices:
-            x, y, w, h = boxes[int(index)]
+            candidate_index = int(index)
+            x, y, w, h = boxes[candidate_index]
             detections.append(
                 Detection(
                     bbox=BBox2D(float(x), float(y), float(x + w), float(y + h)),
-                    label=self._object_class(class_ids[int(index)]),
-                    confidence=float(confidences[int(index)]),
-                    metadata={"class_id": float(class_ids[int(index)])},
+                    label=self._object_class(class_ids[candidate_index]),
+                    confidence=float(confidences[candidate_index]),
+                    metadata={
+                        "class_id": float(class_ids[candidate_index]),
+                        "bbox_clipped": clipped_flags[candidate_index],
+                    },
                 )
             )
         return detections
@@ -152,26 +159,26 @@ class ONNXDetectionHead:
             class_scores = row[5:]
         class_id = int(np.argmax(class_scores))
         confidence = float(objectness * class_scores[class_id])
-        if confidence < self.confidence_threshold:
-            return None
 
         cx, cy, width, height = map(float, row[:4])
-        x1 = (cx - width * 0.5 - meta.pad_x) / meta.scale
-        y1 = (cy - height * 0.5 - meta.pad_y) / meta.scale
-        x2 = (cx + width * 0.5 - meta.pad_x) / meta.scale
-        y2 = (cy + height * 0.5 - meta.pad_y) / meta.scale
-        x1 = max(0.0, min(meta.original_width - 1.0, x1))
-        y1 = max(0.0, min(meta.original_height - 1.0, y1))
-        x2 = max(0.0, min(meta.original_width - 1.0, x2))
-        y2 = max(0.0, min(meta.original_height - 1.0, y2))
+        raw_x1 = (cx - width * 0.5 - meta.pad_x) / meta.scale
+        raw_y1 = (cy - height * 0.5 - meta.pad_y) / meta.scale
+        raw_x2 = (cx + width * 0.5 - meta.pad_x) / meta.scale
+        raw_y2 = (cy + height * 0.5 - meta.pad_y) / meta.scale
+        x1 = max(0.0, min(meta.original_width - 1.0, raw_x1))
+        y1 = max(0.0, min(meta.original_height - 1.0, raw_y1))
+        x2 = max(0.0, min(meta.original_width - 1.0, raw_x2))
+        y2 = max(0.0, min(meta.original_height - 1.0, raw_y2))
+        bbox_clipped = (x1, y1, x2, y2) != (raw_x1, raw_y1, raw_x2, raw_y2)
         box_width = max(0, int(round(x2 - x1)))
         box_height = max(0, int(round(y2 - y1)))
-        if box_width == 0 or box_height == 0:
+        if x2 <= x1 or y2 <= y1 or box_width < 2 or box_height < 2:
             return None
         return DecodedCandidate(
             box=[int(round(x1)), int(round(y1)), box_width, box_height],
             confidence=confidence,
             class_id=class_id,
+            bbox_clipped=bbox_clipped,
         )
 
     def _object_class(self, class_id: int) -> ObjectClass:

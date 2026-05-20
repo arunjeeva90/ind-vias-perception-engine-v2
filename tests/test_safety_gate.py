@@ -13,3 +13,37 @@ def test_safety_gate_uses_bumper_distance_when_available():
     payload = SafetyGate().evaluate([det], SentinelState.NOMINAL)
 
     assert payload["target_distance_m"] == 18.55
+
+
+def test_ego_corridor_target_preferred_over_side_lane_target():
+    side = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    side.track_id = 1
+    side.metadata["distance_bumper_m"] = 5.0
+    side.metadata["in_ego_corridor"] = False
+    center = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    center.track_id = 2
+    center.metadata["distance_bumper_m"] = 20.0
+    center.metadata["in_ego_corridor"] = True
+
+    payload = SafetyGate({"enabled": True}).evaluate([side, center], SentinelState.NOMINAL)
+
+    assert payload["target_track_id"] == 2
+    assert payload["target_distance_m"] == 20.0
+    assert payload["target_in_ego_corridor"] is True
+
+
+def test_target_selection_falls_back_when_no_object_is_inside_corridor():
+    side_near = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    side_near.track_id = 1
+    side_near.metadata["distance_bumper_m"] = 5.0
+    side_near.metadata["in_ego_corridor"] = False
+    side_far = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    side_far.track_id = 2
+    side_far.metadata["distance_bumper_m"] = 20.0
+    side_far.metadata["in_ego_corridor"] = False
+
+    payload = SafetyGate({"enabled": True}).evaluate([side_far, side_near], SentinelState.NOMINAL)
+
+    assert payload["target_track_id"] == 1
+    assert payload["target_distance_m"] == 5.0
+    assert payload["target_in_ego_corridor"] is False
