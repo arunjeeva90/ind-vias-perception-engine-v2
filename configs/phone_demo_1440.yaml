@@ -97,9 +97,11 @@ distance_quality:
 
 ego_motion:
   enable_yaw_detection: true
-  min_flow_points: 25
-  median_dx_threshold: 2.0
-  yaw_score_threshold: 0.55
+  smoothing_window: 5
+  required_turning_frames: 3
+  min_flow_points: 50
+  median_dx_threshold: 3.0
+  yaw_score_threshold: 0.65
 
 runtime:
   fps_nominal: 30
@@ -113,3 +115,10 @@ safety:
   visual_only_confidence: 0.60
   advisory_confidence: 0.30
   aeb_two_frame_gate: true
+
+safety_confirmation:
+  enabled: true
+  required_frames:
+    warning: 2
+    strong_warning: 3
+    aeb_ready: 3

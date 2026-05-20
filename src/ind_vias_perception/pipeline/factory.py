@@ -62,8 +62,13 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
             min_flow_points=int(ego_motion_cfg.get("min_flow_points", 25)),
             median_dx_threshold=float(ego_motion_cfg.get("median_dx_threshold", 2.0)),
             yaw_score_threshold=float(ego_motion_cfg.get("yaw_score_threshold", 0.55)),
+            smoothing_window=int(ego_motion_cfg.get("smoothing_window", 5)),
+            required_turning_frames=int(ego_motion_cfg.get("required_turning_frames", 3)),
         ),
         cais=CAISController(**cais_cfg),
         sentinel=SentinelFSM(),
-        safety_gate=SafetyGate(settings.raw.get("ego_corridor", {})),
+        safety_gate=SafetyGate(
+            settings.raw.get("ego_corridor", {}),
+            settings.raw.get("safety_confirmation", {}),
+        ),
     )

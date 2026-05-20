@@ -48,8 +48,10 @@ class MetricMonocularPipeline:
         if getattr(self, "ego_yaw_enabled", False) and self.ego_yaw_detector is not None:
             yaw_result = self.ego_yaw_detector.update(packet.frame)
             turning = yaw_result.turning_detected
-            scene.ego_motion_state = "turning" if turning else "straight"
+            scene.ego_motion_state = yaw_result.ego_motion_state
             scene.yaw_score = yaw_result.yaw_score
+            scene.yaw_confidence = yaw_result.yaw_confidence
+            scene.turning_confirmation_count = yaw_result.turning_confirmation_count
             scene.median_dx = yaw_result.median_dx
             scene.flow_points = yaw_result.flow_points
 
@@ -100,6 +102,10 @@ class MetricMonocularPipeline:
             det.metadata["ego_motion_state"] = scene.ego_motion_state
             if yaw_result is not None:
                 det.metadata["yaw_score"] = yaw_result.yaw_score
+                det.metadata["yaw_confidence"] = yaw_result.yaw_confidence
+                det.metadata["turning_confirmation_count"] = float(
+                    yaw_result.turning_confirmation_count
+                )
                 det.metadata["median_dx"] = yaw_result.median_dx
                 det.metadata["flow_points"] = float(yaw_result.flow_points)
             det.sigma_depth = max(det.sigma_depth, 0.35 if source == "fused" else 0.55)

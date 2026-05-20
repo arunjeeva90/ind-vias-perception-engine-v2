@@ -5,6 +5,15 @@ from ind_vias_perception.safety.safety_gate.gate import SafetyGate
 from ind_vias_perception.safety.sentinel_fsm.fsm import SentinelState
 
 
+def _warning_det(ttc_s: float = 3.0) -> Detection:
+    det = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    det.track_id = 7
+    det.ttc_s = ttc_s
+    det.sigma_depth = 0.1
+    det.metadata["distance_bumper_m"] = 5.0
+    return det
+
+
 def test_safety_gate_uses_bumper_distance_when_available():
     det = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9, distance_m=20.0)
     det.track_id = 1
@@ -80,9 +89,66 @@ def test_turning_suppresses_strong_warning_when_confidence_is_not_high():
     det.sigma_depth = 0.1
     det.metadata["distance_bumper_m"] = 5.0
     det.metadata["ego_motion_state"] = "turning"
+    det.metadata["yaw_confidence"] = 0.9
 
     payload = SafetyGate().evaluate([det], SentinelState.NOMINAL)
 
     assert payload["warning_level"] == "visual"
     assert payload["aeb_ready"] is False
     assert payload["ego_motion_state"] == "turning"
+
+
+def test_warning_not_confirmed_on_first_frame():
+    gate = SafetyGate(
+        confirmation_cfg={"enabled": True, "required_frames": {"warning": 2}}
+    )
+
+    payload = gate.evaluate([_warning_det(ttc_s=3.0)], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "visual"
+    assert payload["confirmed_warning_level"] == "none"
+    assert payload["warning_level"] == "none"
+    assert payload["confirmation_count"] == 1
+    assert payload["confirmation_required"] == 2
+
+
+def test_warning_confirmed_after_required_frames():
+    gate = SafetyGate(
+        confirmation_cfg={"enabled": True, "required_frames": {"warning": 2}}
+    )
+
+    gate.evaluate([_warning_det(ttc_s=3.0)], SentinelState.NOMINAL)
+    payload = gate.evaluate([_warning_det(ttc_s=3.0)], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "visual"
+    assert payload["confirmed_warning_level"] == "visual"
+    assert payload["warning_level"] == "visual"
+    assert payload["confirmation_count"] == 2
+
+
+def test_warning_confirmation_resets_when_condition_disappears():
+    gate = SafetyGate(
+        confirmation_cfg={"enabled": True, "required_frames": {"warning": 2}}
+    )
+
+    gate.evaluate([_warning_det(ttc_s=3.0)], SentinelState.NOMINAL)
+    clear = _warning_det(ttc_s=9.0)
+    payload = gate.evaluate([clear], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "none"
+    assert payload["confirmed_warning_level"] == "none"
+    assert payload["confirmation_count"] == 0
+
+
+def test_disabled_confirmation_preserves_old_behavior():
+    gate = SafetyGate(
+        confirmation_cfg={"enabled": False, "required_frames": {"warning": 2}}
+    )
+
+    payload = gate.evaluate([_warning_det(ttc_s=3.0)], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "visual"
+    assert payload["confirmed_warning_level"] == "visual"
+    assert payload["warning_level"] == "visual"
+    assert payload["confirmation_count"] == 1
+    assert payload["confirmation_required"] == 1

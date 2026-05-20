@@ -90,6 +90,8 @@ class SceneQuality:
     complexity: float = 0.0
     ego_motion_state: str = "straight"
     yaw_score: float = 0.0
+    yaw_confidence: float = 0.0
+    turning_confirmation_count: int = 0
     median_dx: float = 0.0
     flow_points: int = 0
 

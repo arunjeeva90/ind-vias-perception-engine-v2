@@ -67,4 +67,12 @@ def test_phone_demo_1440_profile_loads():
     assert cfg["distance_quality"]["min_bbox_area_ratio"]["car"] == 0.002
     assert cfg["distance_quality"]["near_horizon_margin_px"] == 40
     assert cfg["ego_motion"]["enable_yaw_detection"] is True
-    assert cfg["ego_motion"]["min_flow_points"] == 25
+    assert cfg["ego_motion"]["smoothing_window"] == 5
+    assert cfg["ego_motion"]["required_turning_frames"] == 3
+    assert cfg["ego_motion"]["min_flow_points"] == 50
+    assert cfg["ego_motion"]["median_dx_threshold"] == 3.0
+    assert cfg["ego_motion"]["yaw_score_threshold"] == 0.65
+    assert cfg["safety_confirmation"]["enabled"] is True
+    assert cfg["safety_confirmation"]["required_frames"]["warning"] == 2
+    assert cfg["safety_confirmation"]["required_frames"]["strong_warning"] == 3
+    assert cfg["safety_confirmation"]["required_frames"]["aeb_ready"] == 3

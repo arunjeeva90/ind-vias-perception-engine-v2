@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from ind_vias_perception.temporal.ego_motion.yaw_detector import analyze_flow
+from ind_vias_perception.temporal.ego_motion.yaw_detector import (
+    OpticalFlowYawDetector,
+    YawDetectionResult,
+    analyze_flow,
+)
 
 
 def test_analyze_flow_detects_consistent_horizontal_yaw():
@@ -48,3 +52,47 @@ def test_analyze_flow_rejects_low_median_dx():
 
     assert result.turning_detected is False
     assert result.median_dx == 0.5
+
+
+def test_single_frame_yaw_spike_does_not_become_turning():
+    detector = OpticalFlowYawDetector(required_turning_frames=3, min_flow_points=50)
+
+    result = detector.update_from_measurement(YawDetectionResult(True, 1.0, 4.0, 80))
+
+    assert result.ego_motion_state == "uncertain"
+    assert result.turning_detected is False
+    assert result.turning_confirmation_count == 1
+
+
+def test_repeated_yaw_over_required_frames_becomes_turning():
+    detector = OpticalFlowYawDetector(required_turning_frames=3, min_flow_points=50)
+
+    detector.update_from_measurement(YawDetectionResult(True, 1.0, 4.0, 80))
+    detector.update_from_measurement(YawDetectionResult(True, 0.9, 3.5, 80))
+    result = detector.update_from_measurement(YawDetectionResult(True, 0.8, 3.2, 80))
+
+    assert result.ego_motion_state == "turning"
+    assert result.turning_detected is True
+    assert result.yaw_confidence == 1.0
+    assert result.turning_confirmation_count == 3
+
+
+def test_low_flow_points_gives_uncertain():
+    detector = OpticalFlowYawDetector(required_turning_frames=3, min_flow_points=50)
+
+    result = detector.update_from_measurement(YawDetectionResult(True, 1.0, 4.0, 10))
+
+    assert result.ego_motion_state == "uncertain"
+    assert result.turning_detected is False
+    assert result.yaw_confidence == 0.0
+
+
+def test_straight_sequence_remains_straight():
+    detector = OpticalFlowYawDetector(required_turning_frames=3, min_flow_points=50)
+
+    for _ in range(5):
+        result = detector.update_from_measurement(YawDetectionResult(False, 0.1, 0.2, 80))
+
+    assert result.ego_motion_state == "straight"
+    assert result.turning_detected is False
+    assert result.turning_confirmation_count == 0

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from ind_vias_perception.common.types import Detection
+from ind_vias_perception.safety.safety_gate.confirmation import WarningConfirmationGate
 from ind_vias_perception.safety.sentinel_fsm.fsm import SentinelState
 
 
 class SafetyGate:
-    def __init__(self, ego_corridor: dict[str, object] | None = None):
+    def __init__(
+        self,
+        ego_corridor: dict[str, object] | None = None,
+        confirmation_cfg: dict[str, object] | None = None,
+    ):
         self.ego_corridor = ego_corridor or {}
+        confirmation_cfg = confirmation_cfg or {}
+        self.confirmation = WarningConfirmationGate(
+            enabled=bool(confirmation_cfg.get("enabled", False)),
+            required_frames=confirmation_cfg.get("required_frames", {}),
+        )
 
     def evaluate(self, detections: list[Detection], sentinel_state: SentinelState) -> dict[str, object]:
         valid = [d for d in detections if _safety_distance_m(d) < 1e9]
@@ -16,19 +26,34 @@ class SafetyGate:
             return {"warning_level": "none", "aeb_ready": False, "reason": "no target"}
         conf = target.confidence * (1.0 - min(0.9, target.sigma_depth))
         ttc = target.ttc_s
-        warning = "none"
+        raw_warning = "none"
         if sentinel_state == SentinelState.NOMINAL and ttc is not None:
             if ttc < 2.0 and conf > 0.75:
-                warning = "strong"
+                raw_warning = "strong"
             elif ttc < 3.5 and conf > 0.55:
-                warning = "visual"
+                raw_warning = "visual"
             elif ttc < 5.0 and conf > 0.35:
-                warning = "advisory"
-        if target.metadata.get("ego_motion_state") == "turning" and warning == "strong" and conf < 0.9:
-            warning = "visual"
+                raw_warning = "advisory"
+        high_conf_turning = (
+            target.metadata.get("ego_motion_state") == "turning"
+            and float(target.metadata.get("yaw_confidence", 0.0)) >= 0.8
+        )
+        if high_conf_turning and raw_warning == "strong" and conf < 0.9:
+            raw_warning = "visual"
+        confirmation = self.confirmation.update(
+            target.track_id,
+            raw_warning,
+            aeb_candidate=raw_warning == "strong",
+        )
+        confirmed_warning = confirmation.confirmed_warning_level
         return {
-            "warning_level": warning,
-            "aeb_ready": warning == "strong",
+            "warning_level": confirmed_warning,
+            "raw_warning_level": raw_warning,
+            "confirmed_warning_level": confirmed_warning,
+            "aeb_ready": confirmed_warning == "strong",
+            "warning_candidate": confirmation.warning_candidate,
+            "confirmation_count": confirmation.confirmation_count,
+            "confirmation_required": confirmation.confirmation_required,
             "target_track_id": target.track_id,
             "target_distance_m": _safety_distance_m(target),
             "target_ttc_s": ttc,
@@ -38,6 +63,7 @@ class SafetyGate:
                 target.metadata.get("distance_valid_for_safety", True)
             ),
             "ego_motion_state": target.metadata.get("ego_motion_state", "straight"),
+            "yaw_confidence": float(target.metadata.get("yaw_confidence", 0.0)),
             "sentinel_state": sentinel_state.value,
         }
 

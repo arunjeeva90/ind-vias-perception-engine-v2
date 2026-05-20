@@ -47,6 +47,8 @@ def draw_perception_output(
             "ego_motion: "
             f"{output.scene_quality.ego_motion_state} "
             f"yaw={output.scene_quality.yaw_score:.2f} "
+            f"conf={output.scene_quality.yaw_confidence:.2f} "
+            f"confirm={output.scene_quality.turning_confirmation_count} "
             f"flow={output.scene_quality.flow_points}"
         )
         for det in output.detections[:3]:
@@ -66,6 +68,13 @@ def draw_perception_output(
                 f"bbox_clipped={det.metadata.get('bbox_clipped', 'n/a')}"
             )
         status_parts.append(f"safety: {payload}")
+        status_parts.append(
+            "confirm: "
+            f"raw={payload.get('raw_warning_level', 'n/a')} "
+            f"confirmed={payload.get('confirmed_warning_level', 'n/a')} "
+            f"count={payload.get('confirmation_count', 'n/a')}/"
+            f"{payload.get('confirmation_required', 'n/a')}"
+        )
     _draw_status(annotated, status_parts)
     return annotated
 
