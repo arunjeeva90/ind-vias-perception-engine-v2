@@ -5,6 +5,7 @@ from typing import Any
 import math
 from ind_vias_perception.common.types import FramePacket, PerceptionOutput
 from ind_vias_perception.config.settings import Settings
+from ind_vias_perception.geometry.scale_fusion.distance_quality import evaluate_distance_quality
 from ind_vias_perception.geometry.scale_fusion.robust_distance import robust_fuse_distance_m
 from ind_vias_perception.ttc.depth_ttc.depth_derivative import ttc_from_depth
 from ind_vias_perception.ttc.fusion.uncertainty_weighted import fuse_ttc
@@ -73,6 +74,17 @@ class MetricMonocularPipeline:
                 self.settings.vehicle.camera_to_front_bumper_offset_m,
             )
             det.metadata["distance_bumper_m"] = float(det.distance_m)
+            confidence, relevance, valid, reasons = evaluate_distance_quality(
+                det,
+                packet.frame.shape[1],
+                packet.frame.shape[0],
+                self.settings.camera.horizon_v_px,
+                self.settings.raw.get("distance_quality", {}),
+            )
+            det.metadata["distance_confidence"] = confidence
+            det.metadata["target_relevance"] = relevance
+            det.metadata["distance_valid_for_safety"] = valid
+            det.metadata["reason_codes"] = ",".join(reasons)
             det.sigma_depth = max(det.sigma_depth, 0.35 if source == "fused" else 0.55)
 
         detections = self.tracker.update(detections, packet.timestamp_s)

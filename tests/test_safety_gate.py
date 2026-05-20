@@ -20,10 +20,12 @@ def test_ego_corridor_target_preferred_over_side_lane_target():
     side.track_id = 1
     side.metadata["distance_bumper_m"] = 5.0
     side.metadata["in_ego_corridor"] = False
+    side.metadata["target_relevance"] = 0.5
     center = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
     center.track_id = 2
     center.metadata["distance_bumper_m"] = 20.0
     center.metadata["in_ego_corridor"] = True
+    center.metadata["target_relevance"] = 0.9
 
     payload = SafetyGate({"enabled": True}).evaluate([side, center], SentinelState.NOMINAL)
 
@@ -37,13 +39,35 @@ def test_target_selection_falls_back_when_no_object_is_inside_corridor():
     side_near.track_id = 1
     side_near.metadata["distance_bumper_m"] = 5.0
     side_near.metadata["in_ego_corridor"] = False
+    side_near.metadata["target_relevance"] = 0.9
     side_far = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
     side_far.track_id = 2
     side_far.metadata["distance_bumper_m"] = 20.0
     side_far.metadata["in_ego_corridor"] = False
+    side_far.metadata["target_relevance"] = 0.5
 
     payload = SafetyGate({"enabled": True}).evaluate([side_far, side_near], SentinelState.NOMINAL)
 
     assert payload["target_track_id"] == 1
     assert payload["target_distance_m"] == 5.0
     assert payload["target_in_ego_corridor"] is False
+
+
+def test_safety_gate_ignores_invalid_side_object_when_valid_ego_object_exists():
+    side = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    side.track_id = 1
+    side.metadata["distance_bumper_m"] = 2.0
+    side.metadata["in_ego_corridor"] = False
+    side.metadata["distance_valid_for_safety"] = False
+    side.metadata["target_relevance"] = 0.95
+    ego = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    ego.track_id = 2
+    ego.metadata["distance_bumper_m"] = 15.0
+    ego.metadata["in_ego_corridor"] = True
+    ego.metadata["distance_valid_for_safety"] = True
+    ego.metadata["target_relevance"] = 0.8
+
+    payload = SafetyGate({"enabled": True}).evaluate([side, ego], SentinelState.NOMINAL)
+
+    assert payload["target_track_id"] == 2
+    assert payload["target_distance_valid_for_safety"] is True

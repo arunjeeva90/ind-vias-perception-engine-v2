@@ -53,6 +53,10 @@ def draw_perception_output(
                 f"Df={_format_float(det.metadata.get('distance_fused_camera_m'))}m "
                 f"Dbump={_format_float(det.metadata.get('distance_bumper_m'))}m "
                 f"src={det.metadata.get('distance_source', 'n/a')} "
+                f"confD={_format_float(det.metadata.get('distance_confidence'))} "
+                f"rel={_format_float(det.metadata.get('target_relevance'))} "
+                f"valid={det.metadata.get('distance_valid_for_safety', 'n/a')} "
+                f"reason={det.metadata.get('reason_codes', 'n/a')} "
                 f"bbox_clipped={det.metadata.get('bbox_clipped', 'n/a')}"
             )
         status_parts.append(f"safety: {payload}")

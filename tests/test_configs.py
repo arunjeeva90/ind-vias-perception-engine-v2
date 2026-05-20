@@ -61,3 +61,5 @@ def test_phone_demo_1440_profile_loads():
     assert cfg["semantic_priors"]["truck"]["height_m"] == 2.80
     assert cfg["ego_corridor"]["enabled"] is True
     assert cfg["ego_corridor"]["bottom_width_norm"] == 0.45
+    assert cfg["distance_quality"]["min_bbox_area_ratio"]["car"] == 0.002
+    assert cfg["distance_quality"]["near_horizon_margin_px"] == 40

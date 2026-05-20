@@ -75,6 +75,18 @@ ego_corridor:
   top_y_norm: 0.45
   bottom_y_norm: 1.0
 
+distance_quality:
+  min_bbox_area_ratio:
+    car: 0.002
+    truck: 0.003
+    bus: 0.003
+    motorcycle: 0.001
+    pedestrian: 0.0008
+    cyclist: 0.0008
+  near_horizon_margin_px: 40
+  side_object_confidence_scale: 0.5
+  disagreement_ratio_limit: 2.0
+
 runtime:
   fps_nominal: 30
   cais:
