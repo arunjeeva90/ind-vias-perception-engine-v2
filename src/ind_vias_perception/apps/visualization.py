@@ -40,6 +40,16 @@ def draw_perception_output(
     ]
     if debug_overlay:
         status_parts.insert(0, f"detection: {detection_backend}")
+        for det in output.detections[:3]:
+            status_parts.append(
+                "gc: "
+                f"u={det.metadata.get('u_gc', 'n/a')} "
+                f"v={det.metadata.get('v_gc', 'n/a')} "
+                f"Dcam={_format_float(det.metadata.get('distance_camera_m'))}m "
+                f"Dbump={_format_float(det.metadata.get('distance_bumper_m'))}m "
+                f"raw={_format_float(det.metadata.get('raw_distance_m'))}m "
+                f"filtered={_format_float(det.metadata.get('filtered_distance_m'))}m"
+            )
         status_parts.append(f"safety: {payload}")
     _draw_status(annotated, status_parts)
     return annotated
@@ -78,3 +88,9 @@ def _draw_status(frame: np.ndarray, lines: list[str]) -> None:
     for idx, line in enumerate(lines):
         y = 8 + line_height * (idx + 1) - 8
         cv2.putText(frame, line, (8, y), font, scale, _TEXT_COLOR, thickness, cv2.LINE_AA)
+
+
+def _format_float(value: object) -> str:
+    if not isinstance(value, (float, int)):
+        return "n/a"
+    return f"{float(value):.1f}"

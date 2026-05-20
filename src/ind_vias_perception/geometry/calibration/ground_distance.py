@@ -5,8 +5,16 @@ from ind_vias_perception.common.types import CameraCalibration
 
 
 def ground_contact_distance_m(v_px: float, cal: CameraCalibration) -> float:
-    denom = max(1.0, v_px - cal.horizon_v_px)
-    return (cal.fy_px * cal.height_m) / denom
+    raw = raw_ground_contact_distance_m(v_px, cal)
+    if not math.isfinite(raw):
+        return float("inf")
+    return min(cal.max_distance_m, max(cal.min_distance_m, raw))
+
+
+def raw_ground_contact_distance_m(v_px: float, cal: CameraCalibration) -> float:
+    if v_px <= cal.horizon_v_px:
+        return float("inf")
+    return (cal.fy_px * cal.height_m) / (v_px - cal.horizon_v_px)
 
 
 def pitch_corrected_distance_m(v_px: float, cal: CameraCalibration) -> float:

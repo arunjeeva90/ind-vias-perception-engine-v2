@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import yaml
 
+from ind_vias_perception.config.settings import load_settings
+
 
 def test_yolov8n_coco_demo_uses_coco_adas_subset():
     with open("configs/yolov8n_coco_demo.yaml", "r", encoding="utf-8") as f:
@@ -19,3 +21,26 @@ def test_yolov8n_coco_demo_uses_coco_adas_subset():
     }
     assert "auto_rickshaw" not in cfg["detection"]["class_names"].values()
     assert "animal" not in cfg["detection"]["class_names"].values()
+
+
+def test_yolov8n_coco_demo_camera_aliases_load():
+    settings = load_settings("configs/yolov8n_coco_demo.yaml")
+
+    assert settings.camera.image_width == 1248
+    assert settings.camera.image_height == 1248
+    assert settings.camera.fx_px == 1100.0
+    assert settings.camera.fy_px == 1100.0
+    assert settings.camera.cx_px == 624.0
+    assert settings.camera.cy_px == 624.0
+    assert settings.camera.height_m == 1.25
+    assert settings.camera.pitch_deg == 0.0
+    assert settings.camera.horizon_v_px == 640.0
+    assert settings.camera.min_distance_m == 2.0
+    assert settings.camera.max_distance_m == 120.0
+    assert settings.vehicle.camera_to_front_bumper_offset_m == 1.45
+
+
+def test_missing_vehicle_config_defaults_to_zero_offset():
+    settings = load_settings("configs/default.yaml")
+
+    assert settings.vehicle.camera_to_front_bumper_offset_m == 0.0

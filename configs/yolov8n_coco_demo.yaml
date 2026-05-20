@@ -1,11 +1,15 @@
 camera:
-  fx_px: 1100.0
-  fy_px: 1100.0
-  cx_px: 640.0
-  cy_px: 360.0
-  height_m: 1.25
-  pitch_deg: 2.0
-  horizon_v_px: 374.0
+  image_width: 1248
+  image_height: 1248
+  fx: 1100.0
+  fy: 1100.0
+  cx: 624.0
+  cy: 624.0
+  camera_height_m: 1.25
+  pitch_deg: 0.0
+  horizon_y: 640
+  min_distance_m: 2.0
+  max_distance_m: 120.0
 
 model:
   backbone: mobilenetv4_hybrid_stub
@@ -41,6 +45,9 @@ detection:
     3: motorcycle
     5: bus
     7: truck
+
+vehicle:
+  camera_to_front_bumper_offset_m: 1.45
 
 runtime:
   fps_nominal: 30

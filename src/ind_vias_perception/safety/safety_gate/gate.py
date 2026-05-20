@@ -7,7 +7,7 @@ from ind_vias_perception.safety.sentinel_fsm.fsm import SentinelState
 class SafetyGate:
     def evaluate(self, detections: list[Detection], sentinel_state: SentinelState) -> dict[str, object]:
         valid = [d for d in detections if d.track_id is not None]
-        target = min(valid, key=lambda d: d.distance_m or 1e9) if valid else None
+        target = min(valid, key=_safety_distance_m) if valid else None
         if target is None:
             return {"warning_level": "none", "aeb_ready": False, "reason": "no target"}
         conf = target.confidence * (1.0 - min(0.9, target.sigma_depth))
@@ -24,7 +24,14 @@ class SafetyGate:
             "warning_level": warning,
             "aeb_ready": warning == "strong",
             "target_track_id": target.track_id,
-            "target_distance_m": target.distance_m,
+            "target_distance_m": _safety_distance_m(target),
             "target_ttc_s": ttc,
             "sentinel_state": sentinel_state.value,
         }
+
+
+def _safety_distance_m(det: Detection) -> float:
+    distance = det.metadata.get("distance_bumper_m", det.distance_m)
+    if distance is None:
+        return 1e9
+    return float(distance)

@@ -9,4 +9,6 @@ class DummyGroundContactHead:
     def forward(self, detections: list[Detection], packet: FramePacket) -> list[Detection]:
         for det in detections:
             det.ground_contact = det.bbox.bottom_center
+            det.metadata["u_gc"] = float(det.ground_contact[0])
+            det.metadata["v_gc"] = float(det.ground_contact[1])
         return detections

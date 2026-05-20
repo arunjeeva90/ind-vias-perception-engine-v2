@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import math
 from ind_vias_perception.geometry.scale_anchors.geometric_anchor import ScaleAnchor
 
 
 def fuse_inverse_variance(anchors: Iterable[ScaleAnchor]) -> tuple[float, float]:
-    valid = [a for a in anchors if a is not None and a.scale_or_distance_m > 0]
+    valid = [
+        a
+        for a in anchors
+        if a is not None and math.isfinite(a.scale_or_distance_m) and a.scale_or_distance_m > 0
+    ]
     if not valid:
         return float("inf"), 1e9
     weights = [1.0 / max(a.sigma, 1e-3) ** 2 for a in valid]

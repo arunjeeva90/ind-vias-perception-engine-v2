@@ -60,6 +60,15 @@ class CameraCalibration:
     height_m: float
     pitch_deg: float
     horizon_v_px: float
+    image_width: int = 0
+    image_height: int = 0
+    min_distance_m: float = 2.0
+    max_distance_m: float = 120.0
+
+
+@dataclass(frozen=True)
+class VehicleConfig:
+    camera_to_front_bumper_offset_m: float = 0.0
 
 
 @dataclass

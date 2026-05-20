@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import math
 from ind_vias_perception.common.types import FramePacket, PerceptionOutput
 from ind_vias_perception.config.settings import Settings
 from ind_vias_perception.geometry.scale_fusion.inverse_variance import fuse_inverse_variance
@@ -47,7 +48,12 @@ class MetricMonocularPipeline:
             geo = self.geometric_anchor.estimate(det, self.settings.camera)
             sem = self.semantic_anchor.estimate(det, self.settings.camera.fy_px)
             distance, sigma = fuse_inverse_variance([geo, sem])
-            det.distance_m = distance
+            det.metadata["distance_camera_m"] = float(distance)
+            det.distance_m = bumper_relative_distance_m(
+                distance,
+                self.settings.vehicle.camera_to_front_bumper_offset_m,
+            )
+            det.metadata["distance_bumper_m"] = float(det.distance_m)
             det.sigma_depth = max(det.sigma_depth, min(1.0, sigma))
 
         detections = self.tracker.update(detections, packet.timestamp_s)
@@ -62,3 +68,9 @@ class MetricMonocularPipeline:
         payload["cais_mode"] = cais_decision.mode
         payload["target_fps"] = cais_decision.target_fps
         return PerceptionOutput(detections=detections, scene_quality=scene, mode=cais_decision.mode, safety_payload=payload)
+
+
+def bumper_relative_distance_m(distance_camera_m: float, offset_m: float) -> float:
+    if not math.isfinite(distance_camera_m):
+        return distance_camera_m
+    return max(distance_camera_m - offset_m, 0.0)
