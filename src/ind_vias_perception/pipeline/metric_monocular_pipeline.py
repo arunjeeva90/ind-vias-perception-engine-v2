@@ -7,6 +7,7 @@ from ind_vias_perception.common.types import FramePacket, PerceptionOutput
 from ind_vias_perception.config.settings import Settings
 from ind_vias_perception.geometry.scale_fusion.distance_quality import evaluate_distance_quality
 from ind_vias_perception.geometry.scale_fusion.robust_distance import robust_fuse_distance_m
+from ind_vias_perception.perception.postprocess.compound_agents import group_compound_agents
 from ind_vias_perception.ttc.depth_ttc.depth_derivative import ttc_from_depth
 from ind_vias_perception.ttc.fusion.uncertainty_weighted import fuse_ttc
 
@@ -36,6 +37,7 @@ class MetricMonocularPipeline:
         features = self.neck.forward(features)
 
         detections = self.detection_head.forward(features, packet)
+        detections = group_compound_agents(detections, self.settings.raw.get("compound_agents", {}))
         _lane = self.lane_head.forward(features, packet)
         _freespace = self.freespace_head.forward(features, packet)
         _tsr = self.tsr_head.forward(features, packet)

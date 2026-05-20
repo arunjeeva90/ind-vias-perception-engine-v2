@@ -59,6 +59,9 @@ def test_phone_demo_1440_profile_loads():
     assert settings.camera.horizon_v_px == float(cfg["camera"]["horizon_y"])
     assert cfg["semantic_priors"]["car"]["width_m"] == 1.75
     assert cfg["semantic_priors"]["truck"]["height_m"] == 2.80
+    assert cfg["semantic_priors"]["two_wheeler_agent"]["width_m"] == 0.90
+    assert cfg["compound_agents"]["enable_two_wheeler_grouping"] is True
+    assert cfg["compound_agents"]["min_iou"] == 0.02
     assert cfg["ego_corridor"]["enabled"] is True
     assert cfg["ego_corridor"]["bottom_width_norm"] == 0.45
     assert cfg["distance_quality"]["min_bbox_area_ratio"]["car"] == 0.002

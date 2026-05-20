@@ -66,6 +66,14 @@ semantic_priors:
     height_m: 1.40
   cyclist:
     height_m: 1.70
+  two_wheeler_agent:
+    width_m: 0.90
+    height_m: 1.65
+
+compound_agents:
+  enable_two_wheeler_grouping: true
+  motorcycle_expand_scale: 1.6
+  min_iou: 0.02
 
 ego_corridor:
   enabled: true

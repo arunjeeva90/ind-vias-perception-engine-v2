@@ -11,6 +11,7 @@ class ObjectClass(str, Enum):
     TRUCK = "truck"
     BUS = "bus"
     MOTORCYCLE = "motorcycle"
+    TWO_WHEELER_AGENT = "two_wheeler_agent"
     AUTO_RICKSHAW = "auto_rickshaw"
     BICYCLE = "bicycle"
     PEDESTRIAN = "pedestrian"

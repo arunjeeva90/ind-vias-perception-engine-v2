@@ -9,6 +9,7 @@ _DEFAULT_PRIORS = {
     "truck": {"width_m": 2.50, "height_m": 2.80},
     "bus": {"width_m": 2.50, "height_m": 3.00},
     "motorcycle": {"width_m": 0.80, "height_m": 1.40},
+    "two_wheeler_agent": {"width_m": 0.90, "height_m": 1.65},
     "auto_rickshaw": {"width_m": 1.30, "height_m": 1.75},
     "bicycle": {"height_m": 1.70},
     "cyclist": {"height_m": 1.70},
