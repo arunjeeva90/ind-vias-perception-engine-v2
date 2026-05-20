@@ -28,6 +28,7 @@ class MetricMonocularPipeline:
     geometric_anchor: Any
     semantic_anchor: Any
     tracker: Any
+    ego_yaw_detector: Any
     cais: Any
     sentinel: Any
     safety_gate: Any
@@ -42,6 +43,15 @@ class MetricMonocularPipeline:
         _freespace = self.freespace_head.forward(features, packet)
         _tsr = self.tsr_head.forward(features, packet)
         scene = self.scene_quality_head.forward(features, packet)
+        turning = False
+        yaw_result = None
+        if getattr(self, "ego_yaw_enabled", False) and self.ego_yaw_detector is not None:
+            yaw_result = self.ego_yaw_detector.update(packet.frame)
+            turning = yaw_result.turning_detected
+            scene.ego_motion_state = "turning" if turning else "straight"
+            scene.yaw_score = yaw_result.yaw_score
+            scene.median_dx = yaw_result.median_dx
+            scene.flow_points = yaw_result.flow_points
 
         detections = self.ground_contact_head.forward(detections, packet)
         detections = self.depth_head.forward(detections, packet)
@@ -87,11 +97,19 @@ class MetricMonocularPipeline:
             det.metadata["target_relevance"] = relevance
             det.metadata["distance_valid_for_safety"] = valid
             det.metadata["reason_codes"] = ",".join(reasons)
+            det.metadata["ego_motion_state"] = scene.ego_motion_state
+            if yaw_result is not None:
+                det.metadata["yaw_score"] = yaw_result.yaw_score
+                det.metadata["median_dx"] = yaw_result.median_dx
+                det.metadata["flow_points"] = float(yaw_result.flow_points)
             det.sigma_depth = max(det.sigma_depth, 0.35 if source == "fused" else 0.55)
 
         detections = self.tracker.update(detections, packet.timestamp_s)
 
         for det in detections:
+            if turning:
+                det.sigma_depth = max(det.sigma_depth, 0.8)
+                det.metadata["ttc_confidence_scale"] = 0.5
             ttc_depth = ttc_from_depth(det.distance_m, det.metadata.get("relative_velocity_mps"))
             det.ttc_s = fuse_ttc([(ttc_depth, det.sigma_depth)])
 

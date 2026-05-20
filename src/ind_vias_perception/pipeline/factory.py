@@ -15,6 +15,7 @@ from ind_vias_perception.perception.heads.tsr.dummy_tsr_head import DummyTSRHead
 from ind_vias_perception.geometry.scale_anchors.geometric_anchor import GeometricGroundContactAnchor
 from ind_vias_perception.geometry.scale_anchors.semantic_anchor import SemanticObjectSizeAnchor
 from ind_vias_perception.temporal.trackers.simple_tracker import SimpleDistanceTracker
+from ind_vias_perception.temporal.ego_motion.yaw_detector import OpticalFlowYawDetector
 from ind_vias_perception.runtime.cais.controller import CAISController
 from ind_vias_perception.safety.sentinel_fsm.fsm import SentinelFSM
 from ind_vias_perception.safety.safety_gate.gate import SafetyGate
@@ -41,6 +42,7 @@ def build_detection_head(settings: Settings):
 def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
     cais_cfg = settings.raw.get("runtime", {}).get("cais", {})
     semantic_priors = settings.raw.get("semantic_priors", {})
+    ego_motion_cfg = settings.raw.get("ego_motion", {})
     return MetricMonocularPipeline(
         settings=settings,
         backbone=MobileNetV4HybridStub(),
@@ -56,6 +58,11 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
         geometric_anchor=GeometricGroundContactAnchor(),
         semantic_anchor=SemanticObjectSizeAnchor(semantic_priors),
         tracker=SimpleDistanceTracker(),
+        ego_yaw_detector=OpticalFlowYawDetector(
+            min_flow_points=int(ego_motion_cfg.get("min_flow_points", 25)),
+            median_dx_threshold=float(ego_motion_cfg.get("median_dx_threshold", 2.0)),
+            yaw_score_threshold=float(ego_motion_cfg.get("yaw_score_threshold", 0.55)),
+        ),
         cais=CAISController(**cais_cfg),
         sentinel=SentinelFSM(),
         safety_gate=SafetyGate(settings.raw.get("ego_corridor", {})),

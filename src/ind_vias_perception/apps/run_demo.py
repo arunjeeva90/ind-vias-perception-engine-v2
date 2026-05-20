@@ -66,6 +66,9 @@ def main() -> None:
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
         raise SystemExit(f"Could not read video: {args.video}")
+    pipeline.ego_yaw_enabled = bool(
+        settings.raw.get("ego_motion", {}).get("enable_yaw_detection", False)
+    )
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:

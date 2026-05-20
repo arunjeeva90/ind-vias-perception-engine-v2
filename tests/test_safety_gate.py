@@ -71,3 +71,18 @@ def test_safety_gate_ignores_invalid_side_object_when_valid_ego_object_exists():
 
     assert payload["target_track_id"] == 2
     assert payload["target_distance_valid_for_safety"] is True
+
+
+def test_turning_suppresses_strong_warning_when_confidence_is_not_high():
+    det = Detection(BBox2D(0, 0, 10, 10), ObjectClass.CAR, 0.9)
+    det.track_id = 1
+    det.ttc_s = 1.0
+    det.sigma_depth = 0.1
+    det.metadata["distance_bumper_m"] = 5.0
+    det.metadata["ego_motion_state"] = "turning"
+
+    payload = SafetyGate().evaluate([det], SentinelState.NOMINAL)
+
+    assert payload["warning_level"] == "visual"
+    assert payload["aeb_ready"] is False
+    assert payload["ego_motion_state"] == "turning"

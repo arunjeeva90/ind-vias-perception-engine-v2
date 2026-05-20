@@ -24,6 +24,8 @@ class SafetyGate:
                 warning = "visual"
             elif ttc < 5.0 and conf > 0.35:
                 warning = "advisory"
+        if target.metadata.get("ego_motion_state") == "turning" and warning == "strong" and conf < 0.9:
+            warning = "visual"
         return {
             "warning_level": warning,
             "aeb_ready": warning == "strong",
@@ -35,6 +37,7 @@ class SafetyGate:
             "target_distance_valid_for_safety": bool(
                 target.metadata.get("distance_valid_for_safety", True)
             ),
+            "ego_motion_state": target.metadata.get("ego_motion_state", "straight"),
             "sentinel_state": sentinel_state.value,
         }
 

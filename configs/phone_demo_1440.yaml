@@ -95,6 +95,12 @@ distance_quality:
   side_object_confidence_scale: 0.5
   disagreement_ratio_limit: 2.0
 
+ego_motion:
+  enable_yaw_detection: true
+  min_flow_points: 25
+  median_dx_threshold: 2.0
+  yaw_score_threshold: 0.55
+
 runtime:
   fps_nominal: 30
   cais:

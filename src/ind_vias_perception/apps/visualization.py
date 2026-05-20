@@ -43,6 +43,12 @@ def draw_perception_output(
     ]
     if debug_overlay:
         status_parts.insert(0, f"detection: {detection_backend}")
+        status_parts.append(
+            "ego_motion: "
+            f"{output.scene_quality.ego_motion_state} "
+            f"yaw={output.scene_quality.yaw_score:.2f} "
+            f"flow={output.scene_quality.flow_points}"
+        )
         for det in output.detections[:3]:
             status_parts.append(
                 "gc: "

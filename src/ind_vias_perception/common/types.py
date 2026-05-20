@@ -88,6 +88,10 @@ class SceneQuality:
     night: float = 0.0
     occlusion: float = 0.0
     complexity: float = 0.0
+    ego_motion_state: str = "straight"
+    yaw_score: float = 0.0
+    median_dx: float = 0.0
+    flow_points: int = 0
 
     @property
     def degraded_score(self) -> float:
