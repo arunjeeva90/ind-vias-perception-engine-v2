@@ -1,13 +1,41 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 
 import cv2
-from ind_vias_perception.common.types import FramePacket
+from ind_vias_perception.common.types import FramePacket, PerceptionOutput
 from ind_vias_perception.config.settings import load_settings
 from ind_vias_perception.pipeline.factory import build_pipeline
 from ind_vias_perception.apps.visualization import draw_perception_output
+
+
+DEBUG_CSV_COLUMNS = [
+    "frame_index",
+    "timestamp_s",
+    "selected_target_track_id",
+    "selected_target_valid_for_safety",
+    "selected_target_reason",
+    "debug_target_track_id",
+    "debug_target_distance_valid_for_safety",
+    "target_distance_m",
+    "target_ttc_s",
+    "target_in_ego_corridor",
+    "target_relevance",
+    "raw_warning_level",
+    "confirmed_warning_level",
+    "warning_candidate",
+    "warning_suppressed_reason",
+    "ego_motion_state",
+    "yaw_confidence",
+    "cais_mode",
+    "cais_score",
+    "cais_reason_codes",
+    "ttc_valid_for_safety",
+    "ttc_reason_codes",
+    "sentinel_state",
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--debug-overlay", action="store_true")
+    parser.add_argument("--debug-csv", default=None)
     return parser
 
 
@@ -74,39 +103,93 @@ def main() -> None:
     if fps <= 0:
         fps = 30.0
     writer = None
+    debug_csv_file = None
+    debug_csv_writer = None
+    if args.debug_csv is not None:
+        debug_csv_path = Path(args.debug_csv)
+        if debug_csv_path.parent != Path("."):
+            debug_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        debug_csv_file = open(debug_csv_path, "w", newline="", encoding="utf-8")
+        debug_csv_writer = csv.DictWriter(debug_csv_file, fieldnames=DEBUG_CSV_COLUMNS)
+        debug_csv_writer.writeheader()
     i = 0
-    while args.max_frames is None or i < args.max_frames:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        out = pipeline.process(FramePacket(frame=frame, timestamp_s=i / fps, frame_id=i))
-        annotated = draw_perception_output(
-            frame,
-            out,
-            detection_backend=detection_backend,
-            debug_overlay=args.debug_overlay,
-            ego_corridor=ego_corridor,
-        )
-        print(out.safety_payload)
-        if args.output is not None:
-            if writer is None:
-                height, width = annotated.shape[:2]
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(args.output, fourcc, fps, (width, height))
-                if not writer.isOpened():
-                    cap.release()
-                    raise SystemExit(f"Could not write video: {args.output}")
-            writer.write(annotated)
-        if args.show:
-            cv2.imshow("IND-VIAS Perception", annotated)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+    try:
+        while args.max_frames is None or i < args.max_frames:
+            ok, frame = cap.read()
+            if not ok:
                 break
-        i += 1
+            timestamp_s = i / fps
+            out = pipeline.process(FramePacket(frame=frame, timestamp_s=timestamp_s, frame_id=i))
+            if debug_csv_writer is not None:
+                write_debug_csv_row(debug_csv_writer, i, timestamp_s, out)
+            annotated = draw_perception_output(
+                frame,
+                out,
+                detection_backend=detection_backend,
+                debug_overlay=args.debug_overlay,
+                ego_corridor=ego_corridor,
+            )
+            print(out.safety_payload)
+            if args.output is not None:
+                if writer is None:
+                    height, width = annotated.shape[:2]
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    writer = cv2.VideoWriter(args.output, fourcc, fps, (width, height))
+                    if not writer.isOpened():
+                        cap.release()
+                        raise SystemExit(f"Could not write video: {args.output}")
+                writer.write(annotated)
+            if args.show:
+                cv2.imshow("IND-VIAS Perception", annotated)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            i += 1
+    finally:
+        if debug_csv_file is not None:
+            debug_csv_file.close()
     cap.release()
     if writer is not None:
         writer.release()
     if args.show:
         cv2.destroyAllWindows()
+
+
+def write_debug_csv_row(
+    writer: csv.DictWriter,
+    frame_index: int,
+    timestamp_s: float,
+    output: PerceptionOutput,
+) -> None:
+    payload = output.safety_payload
+    writer.writerow(
+        {
+            "frame_index": frame_index,
+            "timestamp_s": timestamp_s,
+            "selected_target_track_id": payload.get("target_track_id"),
+            "selected_target_valid_for_safety": payload.get("selected_target_valid_for_safety"),
+            "selected_target_reason": payload.get("selected_target_reason"),
+            "debug_target_track_id": payload.get("debug_target_track_id"),
+            "debug_target_distance_valid_for_safety": payload.get(
+                "debug_target_distance_valid_for_safety"
+            ),
+            "target_distance_m": payload.get("target_distance_m"),
+            "target_ttc_s": payload.get("target_ttc_s"),
+            "target_in_ego_corridor": payload.get("target_in_ego_corridor"),
+            "target_relevance": payload.get("target_relevance"),
+            "raw_warning_level": payload.get("raw_warning_level"),
+            "confirmed_warning_level": payload.get("confirmed_warning_level"),
+            "warning_candidate": payload.get("warning_candidate"),
+            "warning_suppressed_reason": payload.get("warning_suppressed_reason"),
+            "ego_motion_state": payload.get("ego_motion_state"),
+            "yaw_confidence": payload.get("yaw_confidence"),
+            "cais_mode": payload.get("cais_mode"),
+            "cais_score": payload.get("cais_score"),
+            "cais_reason_codes": payload.get("cais_reason_codes"),
+            "ttc_valid_for_safety": payload.get("ttc_valid_for_safety"),
+            "ttc_reason_codes": payload.get("ttc_reason_codes"),
+            "sentinel_state": payload.get("sentinel_state"),
+        }
+    )
 
 
 def validate_detector_config(raw_settings: dict[str, object]) -> None:

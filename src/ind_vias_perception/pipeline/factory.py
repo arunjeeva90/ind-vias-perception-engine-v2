@@ -40,7 +40,7 @@ def build_detection_head(settings: Settings):
 
 
 def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
-    cais_cfg = settings.raw.get("runtime", {}).get("cais", {})
+    cais_cfg = settings.raw.get("runtime", {}).get("cais", {}) | settings.raw.get("cais", {})
     semantic_priors = settings.raw.get("semantic_priors", {})
     ego_motion_cfg = settings.raw.get("ego_motion", {})
     tracking_cfg = settings.raw.get("tracking", {})

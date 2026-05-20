@@ -118,12 +118,18 @@ class MetricMonocularPipeline:
                 det.metadata["ttc_confidence_scale"] = 0.5
             ttc_depth = ttc_from_depth(det.distance_m, det.metadata.get("relative_velocity_mps"))
             det.ttc_s = fuse_ttc([(ttc_depth, det.sigma_depth)])
+            valid_ttc, ttc_reasons = ttc_validity(det)
+            det.metadata["ttc_valid_for_safety"] = valid_ttc
+            det.metadata["ttc_source"] = "depth_derivative"
+            det.metadata["ttc_reason_codes"] = ",".join(ttc_reasons)
 
         cais_decision = self.cais.decide(detections, scene)
         sentinel_state = self.sentinel.update(scene)
         payload = self.safety_gate.evaluate(detections, sentinel_state)
         payload["cais_mode"] = cais_decision.mode
         payload["target_fps"] = cais_decision.target_fps
+        payload["cais_score"] = cais_decision.score
+        payload["cais_reason_codes"] = cais_decision.reason_codes
         return PerceptionOutput(detections=detections, scene_quality=scene, mode=cais_decision.mode, safety_payload=payload)
 
 
@@ -159,3 +165,16 @@ def point_in_ego_corridor(
     width = top_width + t * (bottom_width - top_width)
     center_x = float(cfg.get("center_x_norm", 0.5)) * image_width
     return center_x - width * 0.5 <= u_px <= center_x + width * 0.5
+
+
+def ttc_validity(det) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if det.ttc_s is None:
+        reasons.append("ttc_missing")
+    if not det.metadata.get("distance_valid_for_safety", True):
+        reasons.append("invalid_distance_for_safety")
+    if det.metadata.get("track_predicted", False):
+        reasons.append("predicted_track")
+    if det.metadata.get("ego_motion_state") == "turning":
+        reasons.append("ego_turning")
+    return not reasons, reasons or ["ok"]

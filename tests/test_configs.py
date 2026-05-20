@@ -80,3 +80,6 @@ def test_phone_demo_1440_profile_loads():
     assert cfg["tracking"]["min_hits"] == 2
     assert cfg["tracking"]["iou_weight"] == 0.50
     assert cfg["tracking"]["distance_weight"] == 0.20
+    assert cfg["cais"]["enhanced_score_threshold"] == 0.45
+    assert cfg["cais"]["critical_score_threshold"] == 0.75
+    assert cfg["cais"]["ignore_invalid_side_objects"] is True

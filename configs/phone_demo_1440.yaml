@@ -119,6 +119,11 @@ runtime:
     critical_ttc_s: 3.0
     high_complexity: 0.70
 
+cais:
+  enhanced_score_threshold: 0.45
+  critical_score_threshold: 0.75
+  ignore_invalid_side_objects: true
+
 safety:
   strong_warning_confidence: 0.80
   visual_only_confidence: 0.60
