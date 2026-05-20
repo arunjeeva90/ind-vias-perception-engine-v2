@@ -40,6 +40,8 @@ class SafetyGate:
         )
         if high_conf_turning and raw_warning == "strong" and conf < 0.9:
             raw_warning = "visual"
+        if _predicted_without_recent_confirmation(target) and raw_warning == "strong":
+            raw_warning = "visual"
         confirmation = self.confirmation.update(
             target.track_id,
             raw_warning,
@@ -98,3 +100,9 @@ def _ranked_candidates(detections: list[Detection]) -> list[Detection]:
 
 def _target_sort_key(det: Detection) -> tuple[float, float]:
     return (-float(det.metadata.get("target_relevance", 0.0)), _safety_distance_m(det))
+
+
+def _predicted_without_recent_confirmation(det: Detection) -> bool:
+    if not det.metadata.get("track_predicted", False):
+        return False
+    return float(det.metadata.get("confirmation_count", 0.0)) < 1.0

@@ -103,6 +103,15 @@ ego_motion:
   median_dx_threshold: 3.0
   yaw_score_threshold: 0.65
 
+tracking:
+  max_age: 10
+  min_hits: 2
+  iou_weight: 0.50
+  center_weight: 0.25
+  class_mismatch_penalty: 0.25
+  distance_weight: 0.20
+  max_association_cost: 1.0
+
 runtime:
   fps_nominal: 30
   cais:

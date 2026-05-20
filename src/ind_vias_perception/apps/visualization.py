@@ -29,6 +29,8 @@ def draw_perception_output(
         label = f"{det.label.value} {det.confidence:.2f}"
         if debug_overlay and det.track_id is not None:
             label += f" id:{det.track_id}"
+            label += f" miss:{int(float(det.metadata.get('missing_frames', 0.0)))}"
+            label += f" pred:{det.metadata.get('track_predicted', False)}"
         if det.distance_m is not None:
             label += f" {det.distance_m:.1f}m"
         if det.ttc_s is not None:

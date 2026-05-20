@@ -152,3 +152,15 @@ def test_disabled_confirmation_preserves_old_behavior():
     assert payload["warning_level"] == "visual"
     assert payload["confirmation_count"] == 1
     assert payload["confirmation_required"] == 1
+
+
+def test_predicted_only_track_is_not_used_for_new_strong_warning():
+    gate = SafetyGate()
+    det = _warning_det(ttc_s=1.0)
+    det.metadata["track_predicted"] = True
+
+    payload = gate.evaluate([det], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "visual"
+    assert payload["warning_level"] == "visual"
+    assert payload["aeb_ready"] is False

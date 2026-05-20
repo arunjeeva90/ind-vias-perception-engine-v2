@@ -43,6 +43,7 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
     cais_cfg = settings.raw.get("runtime", {}).get("cais", {})
     semantic_priors = settings.raw.get("semantic_priors", {})
     ego_motion_cfg = settings.raw.get("ego_motion", {})
+    tracking_cfg = settings.raw.get("tracking", {})
     return MetricMonocularPipeline(
         settings=settings,
         backbone=MobileNetV4HybridStub(),
@@ -57,7 +58,15 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
         tsr_head=DummyTSRHead(),
         geometric_anchor=GeometricGroundContactAnchor(),
         semantic_anchor=SemanticObjectSizeAnchor(semantic_priors),
-        tracker=SimpleDistanceTracker(),
+        tracker=SimpleDistanceTracker(
+            max_age=int(tracking_cfg.get("max_age", 10)),
+            min_hits=int(tracking_cfg.get("min_hits", 2)),
+            iou_weight=float(tracking_cfg.get("iou_weight", 0.50)),
+            center_weight=float(tracking_cfg.get("center_weight", 0.25)),
+            class_mismatch_penalty=float(tracking_cfg.get("class_mismatch_penalty", 0.25)),
+            distance_weight=float(tracking_cfg.get("distance_weight", 0.20)),
+            max_association_cost=float(tracking_cfg.get("max_association_cost", 1.0)),
+        ),
         ego_yaw_detector=OpticalFlowYawDetector(
             min_flow_points=int(ego_motion_cfg.get("min_flow_points", 25)),
             median_dx_threshold=float(ego_motion_cfg.get("median_dx_threshold", 2.0)),

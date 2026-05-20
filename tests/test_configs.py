@@ -76,3 +76,7 @@ def test_phone_demo_1440_profile_loads():
     assert cfg["safety_confirmation"]["required_frames"]["warning"] == 2
     assert cfg["safety_confirmation"]["required_frames"]["strong_warning"] == 3
     assert cfg["safety_confirmation"]["required_frames"]["aeb_ready"] == 3
+    assert cfg["tracking"]["max_age"] == 10
+    assert cfg["tracking"]["min_hits"] == 2
+    assert cfg["tracking"]["iou_weight"] == 0.50
+    assert cfg["tracking"]["distance_weight"] == 0.20
