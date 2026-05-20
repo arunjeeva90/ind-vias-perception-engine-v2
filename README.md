@@ -29,7 +29,7 @@ This repo does not ship trained detector weights. To try a real detector, place 
 models/weights/detector.onnx
 ```
 
-Then switch `configs/default.yaml` to the ONNX backend:
+Use the dedicated ONNX demo config. `configs/default.yaml` intentionally stays on the dummy backend so the repo runs without model weights:
 
 ```yaml
 detection:
@@ -39,19 +39,19 @@ detection:
 Smoke-test that OpenCV DNN can find and load the model:
 
 ```powershell
-python scripts/check_onnx_detector.py --config configs/default.yaml
+python scripts/check_onnx_detector.py --config configs/onnx_demo.yaml
 ```
 
 Run image inference with visualization:
 
 ```powershell
-python -m ind_vias_perception --image examples/test_frame.jpg --output examples/out_frame.jpg
+python -m ind_vias_perception --config configs/onnx_demo.yaml --image examples/test_frame.jpg --output examples/out_frame.jpg
 ```
 
 Add the debug overlay to show the active detection backend, track ids, distance, TTC, and the safety payload:
 
 ```powershell
-python -m ind_vias_perception --image examples/test_frame.jpg --output examples/out_frame.jpg --debug-overlay
+python -m ind_vias_perception --config configs/onnx_demo.yaml --image examples/test_frame.jpg --output examples/out_frame.jpg --debug-overlay
 ```
 
 The ONNX detector is only a temporary 3A Object Detection provider. It is converted into existing `Detection` objects and still flows through `MetricMonocularPipeline`, ground-contact/depth/uncertainty, scale anchors, tracker, TTC, CAIS, Sentinel FSM, SafetyGate, and visualization.
