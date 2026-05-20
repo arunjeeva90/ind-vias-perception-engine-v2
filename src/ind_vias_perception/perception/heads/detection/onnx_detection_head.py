@@ -21,6 +21,13 @@ class LetterboxMeta:
     original_height: int
 
 
+@dataclass(frozen=True)
+class DecodedCandidate:
+    box: list[int]
+    confidence: float
+    class_id: int
+
+
 class ONNXDetectionHead:
     name = "onnx_detection"
 
@@ -32,12 +39,14 @@ class ONNXDetectionHead:
         nms_threshold: float = 0.45,
         class_names: dict[int, str] | None = None,
         net: Any | None = None,
+        debug: bool = False,
     ):
         self.model_path = Path(model_path)
         self.input_size = (int(input_size[0]), int(input_size[1]))
         self.confidence_threshold = float(confidence_threshold)
         self.nms_threshold = float(nms_threshold)
         self.class_names = class_names or {}
+        self.debug = debug
         if net is not None:
             self.net = net
         else:
@@ -68,28 +77,58 @@ class ONNXDetectionHead:
         outputs: np.ndarray | list[np.ndarray] | tuple[np.ndarray, ...],
         meta: LetterboxMeta,
     ) -> list[Detection]:
-        expected_columns = None
-        if self.class_names:
-            expected_columns = (4 + len(self.class_names), 5 + len(self.class_names))
-        rows = _flatten_outputs(outputs, expected_columns=expected_columns)
+        rows = _flatten_outputs(outputs)
+        output_shapes = _output_shapes(outputs)
         boxes: list[list[int]] = []
         confidences: list[float] = []
         class_ids: list[int] = []
+        raw_count = len(rows)
+        after_confidence_count = 0
+        after_class_count = 0
+        candidate_scores: list[float] = []
+        candidate_class_ids: list[int] = []
 
         for row in rows:
-            decoded = self._decode_row(row, meta)
+            decoded = self._decode_candidate(row, meta)
             if decoded is None:
                 continue
-            box, confidence, class_id = decoded
-            boxes.append(box)
-            confidences.append(confidence)
-            class_ids.append(class_id)
+            candidate_scores.append(decoded.confidence)
+            candidate_class_ids.append(decoded.class_id)
+            if decoded.confidence < self.confidence_threshold:
+                continue
+            after_confidence_count += 1
+            if self.class_names and decoded.class_id not in self.class_names:
+                continue
+            after_class_count += 1
+            boxes.append(decoded.box)
+            confidences.append(decoded.confidence)
+            class_ids.append(decoded.class_id)
 
-        if not boxes:
+        nms_indices = []
+        if boxes:
+            nms_indices = cv2.dnn.NMSBoxes(
+                boxes,
+                confidences,
+                self.confidence_threshold,
+                self.nms_threshold,
+            )
+        flat_indices = np.array(nms_indices).reshape(-1)
+        if self.debug:
+            top_scores, top_class_ids = _top_candidates(candidate_scores, candidate_class_ids)
+            print(
+                "ONNXDetectionHead debug: "
+                f"output_shapes={output_shapes}, "
+                f"raw={raw_count}, "
+                f"top_scores={top_scores}, "
+                f"top_class_ids={top_class_ids}, "
+                f"after_confidence={after_confidence_count}, "
+                f"after_class_filter={after_class_count}, "
+                f"after_nms={len(flat_indices)}"
+            )
+        if len(flat_indices) == 0:
             return []
-        indices = cv2.dnn.NMSBoxes(boxes, confidences, self.confidence_threshold, self.nms_threshold)
         detections: list[Detection] = []
-        for index in np.array(indices).reshape(-1):
+        for index in flat_indices:
             x, y, w, h = boxes[int(index)]
             detections.append(
                 Detection(
@@ -101,11 +140,11 @@ class ONNXDetectionHead:
             )
         return detections
 
-    def _decode_row(self, row: np.ndarray, meta: LetterboxMeta) -> tuple[list[int], float, int] | None:
+    def _decode_candidate(self, row: np.ndarray, meta: LetterboxMeta) -> DecodedCandidate | None:
         if row.size < 6:
             return None
 
-        if self.class_names and row.size == 4 + len(self.class_names):
+        if _is_yolov8_row(row.size, self.class_names):
             objectness = 1.0
             class_scores = row[4:]
         else:
@@ -129,7 +168,11 @@ class ONNXDetectionHead:
         box_height = max(0, int(round(y2 - y1)))
         if box_width == 0 or box_height == 0:
             return None
-        return [int(round(x1)), int(round(y1)), box_width, box_height], confidence, class_id
+        return DecodedCandidate(
+            box=[int(round(x1)), int(round(y1)), box_width, box_height],
+            confidence=confidence,
+            class_id=class_id,
+        )
 
     def _object_class(self, class_id: int) -> ObjectClass:
         name = str(self.class_names.get(class_id, ObjectClass.UNKNOWN.value)).lower()
@@ -166,12 +209,9 @@ def letterbox(frame: np.ndarray, input_size: tuple[int, int]) -> tuple[np.ndarra
     )
 
 
-def _flatten_outputs(
-    outputs: np.ndarray | list[np.ndarray] | tuple[np.ndarray, ...],
-    expected_columns: tuple[int, ...] | None = None,
-) -> np.ndarray:
+def _flatten_outputs(outputs: np.ndarray | list[np.ndarray] | tuple[np.ndarray, ...]) -> np.ndarray:
     if isinstance(outputs, (list, tuple)):
-        arrays = [_flatten_outputs(output, expected_columns) for output in outputs]
+        arrays = [_flatten_outputs(output) for output in outputs]
         return np.concatenate(arrays, axis=0) if arrays else np.empty((0, 0), dtype=np.float32)
 
     array = np.asarray(outputs)
@@ -180,11 +220,37 @@ def _flatten_outputs(
         return array.reshape(1, -1)
     if array.ndim != 2:
         return array.reshape(-1, array.shape[-1])
-    if expected_columns is not None:
-        if array.shape[1] in expected_columns:
-            return array
-        if array.shape[0] in expected_columns:
-            return array.T
-    if array.shape[0] < array.shape[1] and array.shape[0] <= 128:
+    if array.shape[0] < array.shape[1] and array.shape[0] in {84, 85}:
         return array.T
     return array
+
+
+def _is_yolov8_row(row_size: int, class_names: dict[int, str]) -> bool:
+    if row_size == 84:
+        return True
+    if row_size == 85:
+        return False
+    if class_names:
+        dense_class_count = max(class_names) + 1
+        if row_size == 4 + dense_class_count:
+            return True
+        if row_size == 5 + dense_class_count:
+            return False
+        if row_size == 4 + len(class_names):
+            return True
+        if row_size == 5 + len(class_names):
+            return False
+    return row_size > 85
+
+
+def _output_shapes(outputs: np.ndarray | list[np.ndarray] | tuple[np.ndarray, ...]) -> list[tuple[int, ...]]:
+    if isinstance(outputs, (list, tuple)):
+        return [tuple(np.asarray(output).shape) for output in outputs]
+    return [tuple(np.asarray(outputs).shape)]
+
+
+def _top_candidates(scores: list[float], class_ids: list[int]) -> tuple[list[float], list[int]]:
+    ranked = sorted(zip(scores, class_ids), key=lambda item: item[0], reverse=True)[:10]
+    top_scores = [round(float(score), 4) for score, _ in ranked]
+    top_class_ids = [int(class_id) for _, class_id in ranked]
+    return top_scores, top_class_ids

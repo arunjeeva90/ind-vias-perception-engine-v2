@@ -3,9 +3,17 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 *.egg-info/
+
 data/raw/*
 data/processed/*
 data/logs/*
 !data/**/.gitkeep
+
+# Third-party model weights and generated inference outputs
+*.pt
+*.onnx
 models/weights/*
 !models/weights/.gitkeep
+runs/
+examples/out_*.jpg
+examples/out_*.mp4

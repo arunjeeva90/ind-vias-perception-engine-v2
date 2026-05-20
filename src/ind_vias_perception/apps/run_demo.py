@@ -29,6 +29,8 @@ def main() -> None:
     detection_backend = settings.raw.get("detection", {}).get("backend", "dummy")
     validate_detector_config(settings.raw)
     pipeline = build_pipeline(settings)
+    if hasattr(pipeline.detection_head, "debug"):
+        pipeline.detection_head.debug = args.debug_overlay
 
     if args.image is not None:
         frame = cv2.imread(args.image)

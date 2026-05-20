@@ -36,6 +36,8 @@ detection:
   backend: onnx
 ```
 
+For temporary COCO YOLOv8n testing, use `configs/yolov8n_coco_demo.yaml`. That config maps only the COCO IDs relevant to ADAS (`pedestrian`, `cyclist`, `car`, `motorcycle`, `bus`, `truck`). It is only for temporary COCO YOLO testing; the production class map remains IND-VIAS-specific.
+
 Smoke-test that OpenCV DNN can find and load the model:
 
 ```powershell
