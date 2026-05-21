@@ -136,3 +136,7 @@ safety_confirmation:
     warning: 2
     strong_warning: 3
     aeb_ready: 3
+
+safety_gate:
+  min_relevance_for_fcw_warning: 0.5
+  allow_side_target_fcw_warning: false

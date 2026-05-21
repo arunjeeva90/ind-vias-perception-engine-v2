@@ -83,3 +83,5 @@ def test_phone_demo_1440_profile_loads():
     assert cfg["cais"]["enhanced_score_threshold"] == 0.45
     assert cfg["cais"]["critical_score_threshold"] == 0.75
     assert cfg["cais"]["ignore_invalid_side_objects"] is True
+    assert cfg["safety_gate"]["min_relevance_for_fcw_warning"] == 0.5
+    assert cfg["safety_gate"]["allow_side_target_fcw_warning"] is False

@@ -79,5 +79,6 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
         safety_gate=SafetyGate(
             settings.raw.get("ego_corridor", {}),
             settings.raw.get("safety_confirmation", {}),
+            settings.raw.get("safety_gate", {}),
         ),
     )

@@ -123,13 +123,16 @@ class MetricMonocularPipeline:
             det.metadata["ttc_source"] = "depth_derivative"
             det.metadata["ttc_reason_codes"] = ",".join(ttc_reasons)
 
-        cais_decision = self.cais.decide(detections, scene)
         sentinel_state = self.sentinel.update(scene)
         payload = self.safety_gate.evaluate(detections, sentinel_state)
+        cais_decision = self.cais.decide(detections, scene, payload)
         payload["cais_mode"] = cais_decision.mode
         payload["target_fps"] = cais_decision.target_fps
         payload["cais_score"] = cais_decision.score
         payload["cais_reason_codes"] = cais_decision.reason_codes
+        payload["cais_ttc_used_s"] = cais_decision.ttc_used_s
+        payload["cais_ttc_threshold_s"] = cais_decision.ttc_threshold_s
+        payload["cais_ttc_source_track_id"] = cais_decision.ttc_source_track_id
         return PerceptionOutput(detections=detections, scene_quality=scene, mode=cais_decision.mode, safety_payload=payload)
 
 

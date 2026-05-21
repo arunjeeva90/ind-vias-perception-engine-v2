@@ -10,8 +10,16 @@ class SafetyGate:
         self,
         ego_corridor: dict[str, object] | None = None,
         confirmation_cfg: dict[str, object] | None = None,
+        safety_gate_cfg: dict[str, object] | None = None,
     ):
         self.ego_corridor = ego_corridor or {}
+        safety_gate_cfg = safety_gate_cfg or {}
+        self.min_relevance_for_fcw_warning = float(
+            safety_gate_cfg.get("min_relevance_for_fcw_warning", 0.0)
+        )
+        self.allow_side_target_fcw_warning = bool(
+            safety_gate_cfg.get("allow_side_target_fcw_warning", True)
+        )
         confirmation_cfg = confirmation_cfg or {}
         self.confirmation = WarningConfirmationGate(
             enabled=bool(confirmation_cfg.get("enabled", False)),
@@ -58,6 +66,8 @@ class SafetyGate:
             raw_warning = "visual"
         if _predicted_without_recent_confirmation(target) and raw_warning == "strong":
             raw_warning = "visual"
+        if raw_warning != "none" and self._suppress_side_target_warning(target):
+            raw_warning = "none"
         confirmation = self.confirmation.update(
             target.track_id,
             raw_warning,
@@ -118,6 +128,15 @@ class SafetyGate:
             "warning_suppressed_reason": warning_suppressed_reason,
             "sentinel_state": sentinel_state.value,
         }
+
+    def _suppress_side_target_warning(self, target: Detection) -> bool:
+        if target.metadata.get("in_ego_corridor", False):
+            return False
+        if self.allow_side_target_fcw_warning:
+            return False
+        if bool(target.metadata.get("cut_in_risk", False)):
+            return False
+        return float(target.metadata.get("target_relevance", 0.0)) < self.min_relevance_for_fcw_warning
 
 
 def _safety_distance_m(det: Detection) -> float:

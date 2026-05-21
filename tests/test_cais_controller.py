@@ -14,21 +14,82 @@ def _det(ttc_s: float | None, valid: bool, in_corridor: bool, sigma: float = 0.9
     return det
 
 
-def test_invalid_side_objects_do_not_force_cais_critical():
+def test_missing_ttc_does_not_produce_cais_valid_ttc_below_threshold():
     controller = CAISController(ignore_invalid_side_objects=True)
 
-    decision = controller.decide([_det(1.0, valid=False, in_corridor=False)], SceneQuality())
+    decision = controller.decide(
+        [_det(None, valid=True, in_corridor=True, sigma=0.2)],
+        SceneQuality(),
+        {
+            "selected_target_valid_for_safety": True,
+            "ttc_valid_for_safety": False,
+            "target_ttc_s": None,
+            "target_track_id": 1,
+        },
+    )
 
     assert decision.mode == "nominal"
-    assert decision.score == 0.0
-    assert decision.reason_codes == "nominal"
+    assert "valid_ttc_below_threshold" not in decision.reason_codes
+    assert decision.ttc_used_s is None
+
+
+def test_high_ttc_does_not_produce_cais_valid_ttc_below_threshold():
+    controller = CAISController(critical_ttc_s=3.0)
+
+    decision = controller.decide(
+        [_det(48.0, valid=True, in_corridor=True, sigma=0.2)],
+        SceneQuality(),
+        {
+            "selected_target_valid_for_safety": True,
+            "ttc_valid_for_safety": True,
+            "target_ttc_s": 48.0,
+            "target_track_id": 1,
+        },
+    )
+
+    assert decision.mode == "nominal"
+    assert "valid_ttc_below_threshold" not in decision.reason_codes
+    assert decision.ttc_used_s == 48.0
 
 
 def test_valid_low_ttc_target_can_force_cais_critical():
     controller = CAISController(critical_ttc_s=3.0, critical_score_threshold=0.75)
 
-    decision = controller.decide([_det(1.0, valid=True, in_corridor=True, sigma=0.2)], SceneQuality())
+    decision = controller.decide(
+        [_det(1.0, valid=True, in_corridor=True, sigma=0.2)],
+        SceneQuality(),
+        {
+            "selected_target_valid_for_safety": True,
+            "ttc_valid_for_safety": True,
+            "target_ttc_s": 1.0,
+            "target_track_id": 7,
+        },
+    )
 
     assert decision.mode == "critical"
     assert "valid_ttc_below_threshold" in decision.reason_codes
     assert decision.score >= 0.75
+    assert decision.ttc_used_s == 1.0
+    assert decision.ttc_source_track_id == 7
+
+
+def test_low_ttc_from_non_selected_target_does_not_affect_cais():
+    controller = CAISController(critical_ttc_s=3.0)
+
+    decision = controller.decide(
+        [
+            _det(1.0, valid=True, in_corridor=False, sigma=0.2),
+            _det(48.0, valid=True, in_corridor=True, sigma=0.2),
+        ],
+        SceneQuality(),
+        {
+            "selected_target_valid_for_safety": True,
+            "ttc_valid_for_safety": True,
+            "target_ttc_s": 48.0,
+            "target_track_id": 2,
+        },
+    )
+
+    assert decision.mode == "nominal"
+    assert "valid_ttc_below_threshold" not in decision.reason_codes
+    assert decision.ttc_used_s == 48.0

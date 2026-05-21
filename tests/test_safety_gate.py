@@ -218,6 +218,23 @@ def test_invalid_ttc_is_not_used_for_warning():
     assert payload["confirmed_warning_level"] == "none"
 
 
+def test_side_low_relevance_target_does_not_produce_advisory_fcw_warning():
+    det = _warning_det(ttc_s=3.0)
+    det.metadata["in_ego_corridor"] = False
+    det.metadata["target_relevance"] = 0.2
+    det.metadata["ttc_valid_for_safety"] = True
+
+    payload = SafetyGate(
+        safety_gate_cfg={
+            "min_relevance_for_fcw_warning": 0.5,
+            "allow_side_target_fcw_warning": False,
+        }
+    ).evaluate([det], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "none"
+    assert payload["confirmed_warning_level"] == "none"
+
+
 def test_valid_ego_corridor_target_preferred_over_invalid_nearer_target():
     invalid_near = _invalid_warning_det(ttc_s=1.0)
     invalid_near.track_id = 1

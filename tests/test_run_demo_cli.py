@@ -84,6 +84,13 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
             "ego_motion_state": "straight",
             "yaw_confidence": 0.0,
             "cais_mode": "nominal",
+            "cais_score": 0.0,
+            "cais_reason_codes": "nominal",
+            "cais_ttc_used_s": None,
+            "cais_ttc_threshold_s": 3.0,
+            "cais_ttc_source_track_id": None,
+            "ttc_valid_for_safety": False,
+            "ttc_reason_codes": "ttc_missing",
             "sentinel_state": "nominal",
         },
     )
@@ -103,3 +110,6 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
     assert rows[0]["timestamp_s"] == "0.25"
     assert rows[0]["selected_target_track_id"] == "3"
     assert rows[0]["selected_target_reason"] == "valid_safety_target"
+    assert rows[0]["cais_score"] == "0.0"
+    assert rows[0]["cais_ttc_threshold_s"] == "3.0"
+    assert rows[0]["ttc_reason_codes"] == "ttc_missing"
