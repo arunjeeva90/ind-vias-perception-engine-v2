@@ -85,3 +85,14 @@ def test_phone_demo_1440_profile_loads():
     assert cfg["cais"]["ignore_invalid_side_objects"] is True
     assert cfg["safety_gate"]["min_relevance_for_fcw_warning"] == 0.5
     assert cfg["safety_gate"]["allow_side_target_fcw_warning"] is False
+    assert cfg["cutin"]["min_confidence_for_warning"] == 0.75
+    assert cfg["cutin"]["min_relevance_for_warning"] == 0.45
+    assert cfg["cutin"]["min_corridor_overlap_for_warning"] == 0.15
+    assert cfg["cutin"]["min_corridor_overlap_delta"] == 0.08
+    assert cfg["cutin"]["required_corridor_entry_frames"] == 3
+    assert cfg["cutin"]["min_lateral_history_count"] == 4
+    assert cfg["cutin"]["min_lateral_ttc_s"] == 0.4
+    assert cfg["cutin"]["max_lateral_ttc_s"] == 4.0
+    assert cfg["crossing"]["enabled"] is True
+    assert cfg["crossing"]["min_history_count"] == 8
+    assert cfg["crossing"]["min_lateral_displacement_px"] == 60

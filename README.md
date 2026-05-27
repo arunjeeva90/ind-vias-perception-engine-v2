@@ -56,6 +56,12 @@ Add the debug overlay to show the active detection backend, track ids, distance,
 python -m ind_vias_perception --config configs/onnx_demo.yaml --image examples/test_frame.jpg --output examples/out_frame.jpg --debug-overlay
 ```
 
+For video runs, omit `--max-frames` to process the full input video. `--max-frames` is only a debug/development limiter: for example, `--max-frames 300` on a 30 FPS video processes about 10 seconds (`300 / 30 = 10`). At video start, the CLI prints the input FPS, estimated total frames when available, the `max_frames` value, and whether the run is full-video or limited.
+
+### Debug overlay user manual
+
+The debug overlay is an engineering view, not a final HMI. See `docs/DEBUG_OVERLAY_USER_MANUAL.md` for field meanings, warning interpretation, distance labels, CAIS/Sentinel state, and the config thresholds that affect cut-in and FCW behavior.
+
 The ONNX detector is only a temporary 3A Object Detection provider. It is converted into existing `Detection` objects and still flows through `MetricMonocularPipeline`, ground-contact/depth/uncertainty, scale anchors, tracker, TTC, CAIS, Sentinel FSM, SafetyGate, and visualization.
 
 Licensing note: third-party YOLO/ONNX models can carry GPL, AGPL, commercial, dataset, or export restrictions. Verify the model architecture, weights, labels, and training data licenses before integrating or distributing them.

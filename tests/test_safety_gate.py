@@ -235,6 +235,62 @@ def test_side_low_relevance_target_does_not_produce_advisory_fcw_warning():
     assert payload["confirmed_warning_level"] == "none"
 
 
+def test_cut_in_risk_produces_warning_candidate_payload_fields():
+    det = _warning_det(ttc_s=9.0)
+    det.metadata["in_ego_corridor"] = False
+    det.metadata["target_relevance"] = 0.4
+    det.metadata["cut_in_risk"] = True
+    det.metadata["cutin_valid_for_safety"] = True
+    det.metadata["cutin_warning_candidate"] = "cut_in_risk"
+    det.metadata["cutin_reason_codes"] = "ok"
+    det.metadata["lateral_velocity_px_s"] = -300.0
+    det.metadata["lateral_history_count"] = 5.0
+    det.metadata["corridor_overlap_ratio"] = 0.25
+    det.metadata["corridor_overlap_delta"] = 0.2
+    det.metadata["corridor_entry_confirmed"] = True
+    det.metadata["lateral_motion_stable"] = True
+    det.metadata["ttc_lateral_s"] = 1.2
+    det.metadata["cutin_crossing_trend"] = True
+    det.metadata["cutin_warning_eligible"] = True
+    det.metadata["cutin_state"] = "RIGHT_CUT_IN"
+    det.metadata["side_state"] = "RIGHT"
+    det.metadata["ttc_lateral_s"] = 1.2
+    det.metadata["cutin_confidence"] = 0.8
+
+    payload = SafetyGate().evaluate([det], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "cut_in_risk"
+    assert payload["confirmed_warning_level"] == "cut_in_risk"
+    assert payload["cutin_warning_candidate"] == "cut_in_risk"
+    assert payload["cutin_warning_confirmed"] == "cut_in_risk"
+    assert payload["cutin_target_track_id"] == det.track_id
+    assert payload["cutin_valid_for_safety"] is True
+    assert payload["cutin_reason_codes"] == "ok"
+    assert payload["lateral_history_count"] == 5
+    assert payload["corridor_entry_confirmed"] is True
+    assert payload["lateral_motion_stable"] is True
+    assert payload["cutin_crossing_trend"] is True
+    assert payload["cutin_warning_eligible"] is True
+    assert payload["side_state"] == "RIGHT"
+    assert payload["cutin_state"] == "RIGHT_CUT_IN"
+
+
+def test_invalid_cutin_metadata_does_not_produce_cut_in_risk():
+    det = _warning_det(ttc_s=9.0)
+    det.metadata["cut_in_risk"] = True
+    det.metadata["cutin_valid_for_safety"] = False
+    det.metadata["cutin_warning_candidate"] = "none"
+    det.metadata["cutin_state"] = "RIGHT_CUT_IN"
+    det.metadata["side_state"] = "RIGHT"
+    det.metadata["cutin_confidence"] = 0.8
+
+    payload = SafetyGate().evaluate([det], SentinelState.NOMINAL)
+
+    assert payload["raw_warning_level"] == "none"
+    assert payload["cutin_warning_candidate"] == "none"
+    assert payload["cutin_target_track_id"] is None
+
+
 def test_valid_ego_corridor_target_preferred_over_invalid_nearer_target():
     invalid_near = _invalid_warning_det(ttc_s=1.0)
     invalid_near.track_id = 1

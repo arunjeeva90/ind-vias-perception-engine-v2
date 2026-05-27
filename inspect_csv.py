@@ -27,7 +27,7 @@ print(df["target_in_ego_corridor"].value_counts(dropna=False))
 bad_missing_ttc_cais = df[
     (df["cais_reason_codes"].astype(str).str.contains("valid_ttc_below_threshold", na=False)) &
     (
-        (df["ttc_valid_for_safety"] != True) |
+        (~df["ttc_valid_for_safety"]) |
         (df["target_ttc_s"].isna())
     )
 ]
@@ -41,7 +41,7 @@ bad_high_ttc_cais = df[
 ]
 
 side_warning = df[
-    (df["target_in_ego_corridor"] == False) &
+    (~df["target_in_ego_corridor"]) &
     (pd.to_numeric(df["target_relevance"], errors="coerce") < 0.5) &
     (df["raw_warning_level"].isin(["advisory", "warning", "strong_warning"]))
 ]

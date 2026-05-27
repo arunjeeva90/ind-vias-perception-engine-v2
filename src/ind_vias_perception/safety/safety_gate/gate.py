@@ -58,6 +58,11 @@ class SafetyGate:
                 raw_warning = "visual"
             elif ttc < 5.0 and conf > 0.35:
                 raw_warning = "advisory"
+        cutin_target = _best_cutin_target(detections)
+        if raw_warning == "none" and cutin_target is not None:
+            target = cutin_target
+            ttc = target.ttc_s
+            raw_warning = "cut_in_risk"
         high_conf_turning = (
             target.metadata.get("ego_motion_state") == "turning"
             and float(target.metadata.get("yaw_confidence", 0.0)) >= 0.8
@@ -127,6 +132,61 @@ class SafetyGate:
             "yaw_confidence": float(target.metadata.get("yaw_confidence", 0.0)),
             "warning_suppressed_reason": warning_suppressed_reason,
             "sentinel_state": sentinel_state.value,
+            "cutin_warning_candidate": (
+                confirmation.warning_candidate if confirmation.warning_candidate == "cut_in_risk" else "none"
+            ),
+            "cutin_warning_confirmed": (
+                confirmed_warning if confirmed_warning == "cut_in_risk" else "none"
+            ),
+            "cutin_target_track_id": (
+                target.track_id
+                if target.metadata.get("cutin_valid_for_safety", False)
+                and target.metadata.get("cutin_warning_candidate") == "cut_in_risk"
+                and target.metadata.get("cutin_warning_eligible", False)
+                else None
+            ),
+            "side_state": target.metadata.get("side_state", "n/a"),
+            "cutin_state": target.metadata.get("cutin_state", "NONE"),
+            "ttc_lateral_s": target.metadata.get("ttc_lateral_s"),
+            "cutin_confidence": float(target.metadata.get("cutin_confidence", 0.0)),
+            "cutin_valid_for_safety": bool(target.metadata.get("cutin_valid_for_safety", False)),
+            "cutin_reason_codes": target.metadata.get("cutin_reason_codes", "n/a"),
+            "lateral_velocity_px_s": float(target.metadata.get("lateral_velocity_px_s", 0.0)),
+            "lateral_history_count": int(float(target.metadata.get("lateral_history_count", 0.0))),
+            "corridor_overlap_ratio": float(target.metadata.get("corridor_overlap_ratio", 0.0)),
+            "corridor_overlap_delta": float(target.metadata.get("corridor_overlap_delta", 0.0)),
+            "corridor_entry_confirmed": bool(
+                target.metadata.get("corridor_entry_confirmed", False)
+            ),
+            "lateral_motion_stable": bool(target.metadata.get("lateral_motion_stable", False)),
+            "lateral_center_history_count": int(
+                float(target.metadata.get("lateral_center_history_count", 0.0))
+            ),
+            "lateral_velocity_px_s_smoothed": float(
+                target.metadata.get("lateral_velocity_px_s_smoothed", 0.0)
+            ),
+            "cutin_crossing_trend": bool(target.metadata.get("cutin_crossing_trend", False)),
+            "cutin_entry_side": target.metadata.get("cutin_entry_side", "UNKNOWN"),
+            "cutin_warning_eligible": bool(target.metadata.get("cutin_warning_eligible", False)),
+            "crossing_state": target.metadata.get("crossing_state", "none"),
+            "crossing_confidence": float(target.metadata.get("crossing_confidence", 0.0)),
+            "crossing_history_count": int(float(target.metadata.get("crossing_history_count", 0.0))),
+            "crossing_valid_for_safety": bool(
+                target.metadata.get("crossing_valid_for_safety", False)
+            ),
+            "crossing_reason_codes": target.metadata.get("crossing_reason_codes", "n/a"),
+            "crossing_lateral_displacement_px": float(
+                target.metadata.get("crossing_lateral_displacement_px", 0.0)
+            ),
+            "crossing_corridor_approach": bool(
+                target.metadata.get("crossing_corridor_approach", False)
+            ),
+            "crossing_boundary_suppressed": bool(
+                target.metadata.get("crossing_boundary_suppressed", False)
+            ),
+            "crossing_tiny_object_suppressed": bool(
+                target.metadata.get("crossing_tiny_object_suppressed", False)
+            ),
         }
 
     def _suppress_side_target_warning(self, target: Detection) -> bool:
@@ -158,6 +218,33 @@ def _best_debug_target(detections: list[Detection]) -> Detection | None:
     return sorted(detections, key=_debug_sort_key)[0]
 
 
+def _best_cutin_target(detections: list[Detection]) -> Detection | None:
+    cutin = [
+        det
+        for det in detections
+        if det.metadata.get("cutin_valid_for_safety", False)
+        and det.metadata.get("cutin_warning_candidate") == "cut_in_risk"
+        and det.metadata.get("cut_in_risk", False)
+        and det.metadata.get("cutin_warning_eligible", False)
+        and det.metadata.get("corridor_entry_confirmed", False)
+        and det.metadata.get("lateral_motion_stable", False)
+        and det.metadata.get("distance_valid_for_safety", True)
+        and det.metadata.get("ego_motion_state", "straight") == "straight"
+        and _valid_lateral_ttc(det)
+        and not det.metadata.get("cutin_warning_suppressed", False)
+    ]
+    if not cutin:
+        return None
+    return sorted(
+        cutin,
+        key=lambda det: (
+            -float(det.metadata.get("cutin_confidence", 0.0)),
+            float(det.metadata.get("ttc_lateral_s") or 1e9),
+            _safety_distance_m(det),
+        ),
+    )[0]
+
+
 def _target_sort_key(det: Detection) -> tuple[int, int, float, float, int]:
     return (
         0 if det.metadata.get("in_ego_corridor", False) else 1,
@@ -185,3 +272,11 @@ def _predicted_without_recent_confirmation(det: Detection) -> bool:
     if not det.metadata.get("track_predicted", False):
         return False
     return float(det.metadata.get("confirmation_count", 0.0)) < 1.0
+
+
+def _valid_lateral_ttc(det: Detection) -> bool:
+    ttc = det.metadata.get("ttc_lateral_s")
+    if ttc is None:
+        return False
+    ttc = float(ttc)
+    return 0.4 <= ttc <= 4.0

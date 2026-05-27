@@ -7,7 +7,9 @@ import pytest
 from ind_vias_perception.apps.run_demo import (
     DEBUG_CSV_COLUMNS,
     build_parser,
+    should_process_frame,
     validate_detector_config,
+    video_run_summary,
     write_debug_csv_row,
 )
 from ind_vias_perception.common.types import PerceptionOutput, SceneQuality
@@ -91,6 +93,35 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
             "cais_ttc_source_track_id": None,
             "ttc_valid_for_safety": False,
             "ttc_reason_codes": "ttc_missing",
+            "side_state": "RIGHT",
+            "cutin_state": "RIGHT_CUT_IN",
+            "ttc_lateral_s": 1.2,
+            "cutin_confidence": 0.8,
+            "cutin_valid_for_safety": True,
+            "cutin_reason_codes": "ok",
+            "lateral_velocity_px_s": -300.0,
+            "lateral_history_count": 5,
+            "corridor_overlap_ratio": 0.25,
+            "corridor_overlap_delta": 0.16,
+            "corridor_entry_confirmed": True,
+            "lateral_motion_stable": True,
+            "lateral_center_history_count": 5,
+            "lateral_velocity_px_s_smoothed": -250.0,
+            "cutin_crossing_trend": True,
+            "cutin_entry_side": "RIGHT",
+            "cutin_warning_eligible": True,
+            "cutin_warning_candidate": "cut_in_risk",
+            "cutin_warning_confirmed": "cut_in_risk",
+            "cutin_target_track_id": 3,
+            "crossing_state": "none",
+            "crossing_confidence": 0.0,
+            "crossing_history_count": 5,
+            "crossing_valid_for_safety": False,
+            "crossing_reason_codes": "non_vru_class",
+            "crossing_lateral_displacement_px": 0.0,
+            "crossing_corridor_approach": False,
+            "crossing_boundary_suppressed": False,
+            "crossing_tiny_object_suppressed": False,
             "sentinel_state": "nominal",
         },
     )
@@ -113,3 +144,31 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
     assert rows[0]["cais_score"] == "0.0"
     assert rows[0]["cais_ttc_threshold_s"] == "3.0"
     assert rows[0]["ttc_reason_codes"] == "ttc_missing"
+    assert rows[0]["cutin_state"] == "RIGHT_CUT_IN"
+    assert rows[0]["cutin_valid_for_safety"] == "True"
+    assert rows[0]["cutin_reason_codes"] == "ok"
+    assert rows[0]["lateral_history_count"] == "5"
+    assert rows[0]["cutin_crossing_trend"] == "True"
+    assert rows[0]["corridor_entry_confirmed"] == "True"
+    assert rows[0]["lateral_motion_stable"] == "True"
+    assert rows[0]["crossing_state"] == "none"
+    assert rows[0]["crossing_valid_for_safety"] == "False"
+    assert rows[0]["crossing_reason_codes"] == "non_vru_class"
+    assert rows[0]["cutin_warning_eligible"] == "True"
+    assert rows[0]["cutin_target_track_id"] == "3"
+
+
+def test_no_max_frames_means_no_artificial_frame_limit():
+    assert should_process_frame(0, None) is True
+    assert should_process_frame(10_000, None) is True
+    summary = video_run_summary(30.0, 900, None)
+    assert "max_frames=none" in summary
+    assert "mode=full video" in summary
+
+
+def test_max_frames_limits_processing_when_provided():
+    assert should_process_frame(299, 300) is True
+    assert should_process_frame(300, 300) is False
+    summary = video_run_summary(30.0, 900, 300)
+    assert "max_frames=300" in summary
+    assert "mode=limited debug run" in summary

@@ -16,6 +16,7 @@ from ind_vias_perception.geometry.scale_anchors.geometric_anchor import Geometri
 from ind_vias_perception.geometry.scale_anchors.semantic_anchor import SemanticObjectSizeAnchor
 from ind_vias_perception.temporal.trackers.simple_tracker import SimpleDistanceTracker
 from ind_vias_perception.temporal.ego_motion.yaw_detector import OpticalFlowYawDetector
+from ind_vias_perception.ttc.cutin.lateral_cutin import LateralCutInDetector
 from ind_vias_perception.runtime.cais.controller import CAISController
 from ind_vias_perception.safety.sentinel_fsm.fsm import SentinelFSM
 from ind_vias_perception.safety.safety_gate.gate import SafetyGate
@@ -44,6 +45,7 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
     semantic_priors = settings.raw.get("semantic_priors", {})
     ego_motion_cfg = settings.raw.get("ego_motion", {})
     tracking_cfg = settings.raw.get("tracking", {})
+    cutin_cfg = settings.raw.get("cutin", {})
     return MetricMonocularPipeline(
         settings=settings,
         backbone=MobileNetV4HybridStub(),
@@ -73,6 +75,33 @@ def build_pipeline(settings: Settings) -> MetricMonocularPipeline:
             yaw_score_threshold=float(ego_motion_cfg.get("yaw_score_threshold", 0.55)),
             smoothing_window=int(ego_motion_cfg.get("smoothing_window", 5)),
             required_turning_frames=int(ego_motion_cfg.get("required_turning_frames", 3)),
+        ),
+        cutin_detector=LateralCutInDetector(
+            enabled=bool(cutin_cfg.get("enabled", False)),
+            history_size=int(cutin_cfg.get("history_size", 10)),
+            min_history=int(cutin_cfg.get("min_history", 5)),
+            lateral_velocity_threshold_px_s=float(
+                cutin_cfg.get("lateral_velocity_threshold_px_s", 25.0)
+            ),
+            max_relevant_distance_m=float(cutin_cfg.get("max_relevant_distance_m", 22.0)),
+            lateral_ttc_threshold_s=float(cutin_cfg.get("lateral_ttc_threshold_s", 2.8)),
+            min_confidence_for_warning=float(cutin_cfg.get("min_confidence_for_warning", 0.75)),
+            min_relevance_for_warning=float(cutin_cfg.get("min_relevance_for_warning", 0.45)),
+            min_corridor_overlap_for_warning=float(
+                cutin_cfg.get("min_corridor_overlap_for_warning", 0.15)
+            ),
+            require_valid_distance_for_warning=bool(
+                cutin_cfg.get("require_valid_distance_for_warning", True)
+            ),
+            suppress_near_image_boundary=bool(cutin_cfg.get("suppress_near_image_boundary", True)),
+            boundary_margin_px=float(cutin_cfg.get("boundary_margin_px", 20.0)),
+            min_corridor_overlap_delta=float(cutin_cfg.get("min_corridor_overlap_delta", 0.08)),
+            required_corridor_entry_frames=int(cutin_cfg.get("required_corridor_entry_frames", 3)),
+            min_lateral_history_count=int(cutin_cfg.get("min_lateral_history_count", 4)),
+            min_lateral_ttc_s=float(cutin_cfg.get("min_lateral_ttc_s", 0.4)),
+            max_lateral_ttc_s=float(cutin_cfg.get("max_lateral_ttc_s", 4.0)),
+            crossing_cfg=settings.raw.get("crossing", {}),
+            ego_corridor=settings.raw.get("ego_corridor", {}),
         ),
         cais=CAISController(**cais_cfg),
         sentinel=SentinelFSM(),

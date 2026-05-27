@@ -44,7 +44,7 @@ class WarningConfirmationGate:
             return "aeb_ready"
         if raw_warning_level == "strong":
             return "strong_warning"
-        if raw_warning_level in {"visual", "advisory"}:
+        if raw_warning_level in {"visual", "advisory", "cut_in_risk"}:
             return "warning"
         return "none"
 

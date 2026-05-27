@@ -35,6 +35,28 @@ def draw_perception_output(
             label += f" {det.distance_m:.1f}m"
         if det.ttc_s is not None:
             label += f" TTC {det.ttc_s:.1f}s"
+        if debug_overlay:
+            label += (
+                f" side:{det.metadata.get('side_state', 'n/a')}"
+                f" cut:{det.metadata.get('cutin_state', 'NONE')}"
+            )
+            label += f" cv:{det.metadata.get('cutin_valid_for_safety', False)}"
+            if det.metadata.get("corridor_entry_confirmed") is not None:
+                label += f" ce:{det.metadata.get('corridor_entry_confirmed', False)}"
+            if isinstance(det.metadata.get("corridor_overlap_ratio"), (float, int)):
+                label += f" ov:{float(det.metadata['corridor_overlap_ratio']):.2f}"
+            if isinstance(det.metadata.get("corridor_overlap_delta"), (float, int)):
+                label += f" dov:{float(det.metadata['corridor_overlap_delta']):.2f}"
+            ttc_lateral = det.metadata.get("ttc_lateral_s")
+            if isinstance(ttc_lateral, (float, int)):
+                label += f" lat:{float(ttc_lateral):.1f}s"
+            if det.metadata.get("cutin_warning_eligible") is not None:
+                label += f" elig:{det.metadata.get('cutin_warning_eligible', False)}"
+            crossing = det.metadata.get("crossing_state")
+            if crossing not in {None, "none"}:
+                label += f" cross:{crossing}"
+                label += f" xconf:{_format_float(det.metadata.get('crossing_confidence'))}"
+                label += f" xvalid:{det.metadata.get('crossing_valid_for_safety', False)}"
         _draw_label(annotated, label, (x1, max(0, y1 - 8)))
 
     payload = output.safety_payload
@@ -67,7 +89,22 @@ def draw_perception_output(
                 f"rel={_format_float(det.metadata.get('target_relevance'))} "
                 f"valid={det.metadata.get('distance_valid_for_safety', 'n/a')} "
                 f"reason={det.metadata.get('reason_codes', 'n/a')} "
-                f"bbox_clipped={det.metadata.get('bbox_clipped', 'n/a')}"
+                f"bbox_clipped={det.metadata.get('bbox_clipped', 'n/a')} "
+                f"side={det.metadata.get('side_state', 'n/a')} "
+                f"cutin={det.metadata.get('cutin_state', 'NONE')} "
+                f"ttc_lat={_format_float(det.metadata.get('ttc_lateral_s'))} "
+                f"cut_conf={_format_float(det.metadata.get('cutin_confidence'))} "
+                f"cut_valid={det.metadata.get('cutin_valid_for_safety', False)} "
+                f"cut_reason={det.metadata.get('cutin_reason_codes', 'n/a')} "
+                f"vx={_format_float(det.metadata.get('lateral_velocity_px_s'))} "
+                f"hist={det.metadata.get('lateral_history_count', 'n/a')} "
+                f"overlap={_format_float(det.metadata.get('corridor_overlap_ratio'))} "
+                f"dov={_format_float(det.metadata.get('corridor_overlap_delta'))} "
+                f"ce={det.metadata.get('corridor_entry_confirmed', False)} "
+                f"cross={det.metadata.get('cutin_crossing_trend', False)} "
+                f"eligible={det.metadata.get('cutin_warning_eligible', False)} "
+                f"stable={det.metadata.get('lateral_motion_stable', False)} "
+                f"cross_state={det.metadata.get('crossing_state', 'none')}"
             )
         status_parts.append(f"safety: {payload}")
         status_parts.append(

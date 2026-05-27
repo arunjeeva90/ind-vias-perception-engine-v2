@@ -37,6 +37,35 @@ DEBUG_CSV_COLUMNS = [
     "cais_ttc_source_track_id",
     "ttc_valid_for_safety",
     "ttc_reason_codes",
+    "side_state",
+    "cutin_state",
+    "ttc_lateral_s",
+    "cutin_confidence",
+    "cutin_valid_for_safety",
+    "cutin_reason_codes",
+    "lateral_velocity_px_s",
+    "lateral_history_count",
+    "corridor_overlap_ratio",
+    "corridor_overlap_delta",
+    "corridor_entry_confirmed",
+    "lateral_motion_stable",
+    "lateral_center_history_count",
+    "lateral_velocity_px_s_smoothed",
+    "cutin_crossing_trend",
+    "cutin_entry_side",
+    "cutin_warning_eligible",
+    "cutin_warning_candidate",
+    "cutin_warning_confirmed",
+    "cutin_target_track_id",
+    "crossing_state",
+    "crossing_confidence",
+    "crossing_history_count",
+    "crossing_valid_for_safety",
+    "crossing_reason_codes",
+    "crossing_lateral_displacement_px",
+    "crossing_corridor_approach",
+    "crossing_boundary_suppressed",
+    "crossing_tiny_object_suppressed",
     "sentinel_state",
 ]
 
@@ -105,6 +134,8 @@ def main() -> None:
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
         fps = 30.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    print(video_run_summary(fps, total_frames, args.max_frames))
     writer = None
     debug_csv_file = None
     debug_csv_writer = None
@@ -117,7 +148,7 @@ def main() -> None:
         debug_csv_writer.writeheader()
     i = 0
     try:
-        while args.max_frames is None or i < args.max_frames:
+        while should_process_frame(i, args.max_frames):
             ok, frame = cap.read()
             if not ok:
                 break
@@ -193,8 +224,51 @@ def write_debug_csv_row(
             "cais_ttc_source_track_id": payload.get("cais_ttc_source_track_id"),
             "ttc_valid_for_safety": payload.get("ttc_valid_for_safety"),
             "ttc_reason_codes": payload.get("ttc_reason_codes"),
+            "side_state": payload.get("side_state"),
+            "cutin_state": payload.get("cutin_state"),
+            "ttc_lateral_s": payload.get("ttc_lateral_s"),
+            "cutin_confidence": payload.get("cutin_confidence"),
+            "cutin_valid_for_safety": payload.get("cutin_valid_for_safety"),
+            "cutin_reason_codes": payload.get("cutin_reason_codes"),
+            "lateral_velocity_px_s": payload.get("lateral_velocity_px_s"),
+            "lateral_history_count": payload.get("lateral_history_count"),
+            "corridor_overlap_ratio": payload.get("corridor_overlap_ratio"),
+            "corridor_overlap_delta": payload.get("corridor_overlap_delta"),
+            "corridor_entry_confirmed": payload.get("corridor_entry_confirmed"),
+            "lateral_motion_stable": payload.get("lateral_motion_stable"),
+            "lateral_center_history_count": payload.get("lateral_center_history_count"),
+            "lateral_velocity_px_s_smoothed": payload.get("lateral_velocity_px_s_smoothed"),
+            "cutin_crossing_trend": payload.get("cutin_crossing_trend"),
+            "cutin_entry_side": payload.get("cutin_entry_side"),
+            "cutin_warning_eligible": payload.get("cutin_warning_eligible"),
+            "cutin_warning_candidate": payload.get("cutin_warning_candidate"),
+            "cutin_warning_confirmed": payload.get("cutin_warning_confirmed"),
+            "cutin_target_track_id": payload.get("cutin_target_track_id"),
+            "crossing_state": payload.get("crossing_state"),
+            "crossing_confidence": payload.get("crossing_confidence"),
+            "crossing_history_count": payload.get("crossing_history_count"),
+            "crossing_valid_for_safety": payload.get("crossing_valid_for_safety"),
+            "crossing_reason_codes": payload.get("crossing_reason_codes"),
+            "crossing_lateral_displacement_px": payload.get("crossing_lateral_displacement_px"),
+            "crossing_corridor_approach": payload.get("crossing_corridor_approach"),
+            "crossing_boundary_suppressed": payload.get("crossing_boundary_suppressed"),
+            "crossing_tiny_object_suppressed": payload.get("crossing_tiny_object_suppressed"),
             "sentinel_state": payload.get("sentinel_state"),
         }
+    )
+
+
+def should_process_frame(frame_index: int, max_frames: int | None) -> bool:
+    return max_frames is None or frame_index < max_frames
+
+
+def video_run_summary(fps: float, total_frames: int, max_frames: int | None) -> str:
+    total = str(total_frames) if total_frames > 0 else "unknown"
+    mode = "full video" if max_frames is None else "limited debug run"
+    max_value = "none" if max_frames is None else str(max_frames)
+    return (
+        f"Video input: fps={fps:.2f}, total_frames={total}, "
+        f"max_frames={max_value}, mode={mode}"
     )
 
 

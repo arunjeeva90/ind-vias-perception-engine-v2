@@ -140,3 +140,30 @@ safety_confirmation:
 safety_gate:
   min_relevance_for_fcw_warning: 0.5
   allow_side_target_fcw_warning: false
+
+cutin:
+  enabled: true
+  history_size: 10
+  min_history: 5
+  lateral_velocity_threshold_px_s: 25.0
+  max_relevant_distance_m: 22.0
+  lateral_ttc_threshold_s: 2.8
+  min_confidence_for_warning: 0.75
+  min_relevance_for_warning: 0.45
+  min_corridor_overlap_for_warning: 0.15
+  require_valid_distance_for_warning: true
+  suppress_near_image_boundary: true
+  boundary_margin_px: 20
+  min_corridor_overlap_delta: 0.08
+  required_corridor_entry_frames: 3
+  min_lateral_history_count: 4
+  min_lateral_ttc_s: 0.4
+  max_lateral_ttc_s: 4.0
+
+crossing:
+  enabled: true
+  min_history_count: 8
+  min_lateral_displacement_px: 60
+  max_distance_m: 25.0
+  min_confidence: 0.7
+  min_bbox_area_ratio: 0.0008

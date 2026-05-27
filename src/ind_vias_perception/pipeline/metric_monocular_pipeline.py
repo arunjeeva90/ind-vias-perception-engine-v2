@@ -29,6 +29,7 @@ class MetricMonocularPipeline:
     semantic_anchor: Any
     tracker: Any
     ego_yaw_detector: Any
+    cutin_detector: Any
     cais: Any
     sentinel: Any
     safety_gate: Any
@@ -111,6 +112,13 @@ class MetricMonocularPipeline:
             det.sigma_depth = max(det.sigma_depth, 0.35 if source == "fused" else 0.55)
 
         detections = self.tracker.update(detections, packet.timestamp_s)
+        detections = self.cutin_detector.update(
+            detections,
+            packet.timestamp_s,
+            packet.frame.shape[1],
+            packet.frame.shape[0],
+            scene,
+        )
 
         for det in detections:
             if turning:
