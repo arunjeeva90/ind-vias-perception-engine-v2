@@ -1,4 +1,5 @@
 .venv/
+.venv_*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -15,5 +16,6 @@ data/logs/*
 models/weights/*
 !models/weights/.gitkeep
 runs/
+outputs/
 examples/out_*.jpg
-examples/out_*.mp4
+examples/*.mp4
