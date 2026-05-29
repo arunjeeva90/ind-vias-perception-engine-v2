@@ -115,6 +115,7 @@ class SafetyGate:
             "confirmation_count": confirmation.confirmation_count,
             "confirmation_required": confirmation.confirmation_required,
             "target_track_id": target.track_id,
+            "target_class": target.label.value,
             "target_distance_m": _safety_distance_m(target),
             "target_ttc_s": ttc,
             "ttc_valid_for_safety": bool(target.metadata.get("ttc_valid_for_safety", False)),
@@ -124,12 +125,38 @@ class SafetyGate:
             "target_distance_valid_for_safety": bool(
                 target.metadata.get("distance_valid_for_safety", True)
             ),
+            "distance_confidence": float(target.metadata.get("distance_confidence", 0.0)),
+            "distance_reason_codes": target.metadata.get(
+                "distance_reason_codes",
+                target.metadata.get("reason_codes", "n/a"),
+            ),
+            "distance_ground_m": target.metadata.get("distance_ground_m"),
+            "distance_semantic_m": target.metadata.get("distance_semantic_m"),
+            "distance_fused_camera_m": target.metadata.get("distance_fused_camera_m"),
+            "distance_bumper_m": target.metadata.get("distance_bumper_m"),
+            "distance_source": target.metadata.get("distance_source", "n/a"),
+            "ground_semantic_ratio": target.metadata.get("ground_semantic_ratio"),
+            "bbox_area_ratio": target.metadata.get("bbox_area_ratio"),
+            "ground_contact_row": target.metadata.get("ground_contact_row"),
+            "horizon_y": target.metadata.get("horizon_y"),
+            "near_horizon_margin_px": target.metadata.get("near_horizon_margin_px"),
+            "is_side_object": bool(target.metadata.get("is_side_object", False)),
+            "is_near_boundary": bool(target.metadata.get("is_near_boundary", False)),
+            "is_tiny_bbox": bool(target.metadata.get("is_tiny_bbox", False)),
             "selected_target_valid_for_safety": _distance_valid_for_safety(selected_target),
             "selected_target_reason": selected_target_reason,
             "debug_target_track_id": debug_target.track_id,
             "debug_target_distance_valid_for_safety": _distance_valid_for_safety(debug_target),
             "ego_motion_state": target.metadata.get("ego_motion_state", "straight"),
             "yaw_confidence": float(target.metadata.get("yaw_confidence", 0.0)),
+            "ego_motion_reason_codes": target.metadata.get("ego_motion_reason_codes", "ok"),
+            "ego_motion_feature_count": int(
+                float(target.metadata.get("ego_motion_feature_count", 0.0))
+            ),
+            "ego_motion_roi_shape": target.metadata.get("ego_motion_roi_shape", ""),
+            "ego_motion_downscale_factor": float(
+                target.metadata.get("ego_motion_downscale_factor", 1.0)
+            ),
             "warning_suppressed_reason": warning_suppressed_reason,
             "sentinel_state": sentinel_state.value,
             "cutin_warning_candidate": (

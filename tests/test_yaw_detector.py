@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+import cv2
 
+from ind_vias_perception.common.types import FramePacket
+from ind_vias_perception.config.settings import load_settings
+from ind_vias_perception.pipeline.factory import build_pipeline
 from ind_vias_perception.temporal.ego_motion.yaw_detector import (
     OpticalFlowYawDetector,
     YawDetectionResult,
@@ -96,3 +100,65 @@ def test_straight_sequence_remains_straight():
     assert result.ego_motion_state == "straight"
     assert result.turning_detected is False
     assert result.turning_confirmation_count == 0
+
+
+def test_yaw_detector_handles_large_frame_without_crash():
+    detector = OpticalFlowYawDetector(max_feature_width=640, max_feature_height=640)
+    frame = np.zeros((1440, 1440, 3), dtype=np.uint8)
+
+    first = detector.update(frame)
+    second = detector.update(frame)
+
+    assert first.ego_motion_state == "uncertain"
+    assert second.ego_motion_state == "uncertain"
+    assert second.yaw_confidence == 0.0
+    height, width = [int(part) for part in second.roi_shape.split("x")]
+    assert height <= 640
+    assert width <= 640
+
+
+def test_yaw_detector_handles_good_features_returning_none(monkeypatch):
+    detector = OpticalFlowYawDetector()
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    detector.update(frame)
+
+    monkeypatch.setattr(cv2, "goodFeaturesToTrack", lambda *args, **kwargs: None)
+    result = detector.update(frame)
+
+    assert result.ego_motion_state == "uncertain"
+    assert result.yaw_confidence == 0.0
+    assert result.reason_codes == "ego_motion_feature_failure"
+
+
+def test_yaw_detector_handles_cv2_error_and_returns_uncertain(monkeypatch):
+    detector = OpticalFlowYawDetector()
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    detector.update(frame)
+
+    def raise_cv2_error(*_args, **_kwargs):
+        raise cv2.error("forced")
+
+    monkeypatch.setattr(cv2, "goodFeaturesToTrack", raise_cv2_error)
+    result = detector.update(frame)
+
+    assert result.ego_motion_state == "uncertain"
+    assert result.yaw_confidence == 0.0
+    assert result.reason_codes == "opencv_memory_error"
+
+
+def test_full_pipeline_continues_when_yaw_detector_feature_extraction_fails(monkeypatch):
+    settings = load_settings("configs/default.yaml")
+    pipeline = build_pipeline(settings)
+    pipeline.ego_yaw_enabled = True
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    pipeline.process(FramePacket(frame=frame, timestamp_s=0.0, frame_id=0))
+
+    def raise_cv2_error(*_args, **_kwargs):
+        raise cv2.error("forced")
+
+    monkeypatch.setattr(cv2, "goodFeaturesToTrack", raise_cv2_error)
+    out = pipeline.process(FramePacket(frame=frame, timestamp_s=1 / 30.0, frame_id=1))
+
+    assert out.scene_quality.ego_motion_state == "uncertain"
+    assert out.scene_quality.ego_motion_reason_codes == "opencv_memory_error"
+    assert out.safety_payload["ego_motion_reason_codes"] == "opencv_memory_error"

@@ -5,14 +5,16 @@ import csv
 import pytest
 
 from ind_vias_perception.apps.run_demo import (
+    DETECTION_DEBUG_CSV_COLUMNS,
     DEBUG_CSV_COLUMNS,
     build_parser,
     should_process_frame,
     validate_detector_config,
     video_run_summary,
+    write_debug_detections_csv_rows,
     write_debug_csv_row,
 )
-from ind_vias_perception.common.types import PerceptionOutput, SceneQuality
+from ind_vias_perception.common.types import BBox2D, Detection, ObjectClass, PerceptionOutput, SceneQuality
 
 
 def test_cli_parser_accepts_image_video_output_show_and_max_frames():
@@ -30,6 +32,8 @@ def test_cli_parser_accepts_image_video_output_show_and_max_frames():
             "--debug-overlay",
             "--debug-csv",
             "debug.csv",
+            "--debug-detections-csv",
+            "detections.csv",
             "--max-frames",
             "7",
         ]
@@ -41,6 +45,7 @@ def test_cli_parser_accepts_image_video_output_show_and_max_frames():
     assert args.show is True
     assert args.debug_overlay is True
     assert args.debug_csv == "debug.csv"
+    assert args.debug_detections_csv == "detections.csv"
     assert args.max_frames == 7
 
 
@@ -71,6 +76,7 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
         mode="nominal",
         safety_payload={
             "target_track_id": 3,
+            "target_class": "car",
             "selected_target_valid_for_safety": True,
             "selected_target_reason": "valid_safety_target",
             "debug_target_track_id": 4,
@@ -79,6 +85,21 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
             "target_ttc_s": 2.4,
             "target_in_ego_corridor": True,
             "target_relevance": 0.9,
+            "distance_confidence": 0.8,
+            "distance_reason_codes": "ok",
+            "distance_ground_m": 12.0,
+            "distance_semantic_m": 13.0,
+            "distance_fused_camera_m": 12.5,
+            "distance_bumper_m": 11.0,
+            "distance_source": "fused",
+            "ground_semantic_ratio": 1.08,
+            "bbox_area_ratio": 0.04,
+            "ground_contact_row": 900.0,
+            "horizon_y": 640.0,
+            "near_horizon_margin_px": 40.0,
+            "is_side_object": False,
+            "is_near_boundary": False,
+            "is_tiny_bbox": False,
             "raw_warning_level": "visual",
             "confirmed_warning_level": "visual",
             "warning_candidate": "visual",
@@ -140,7 +161,10 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
     assert rows[0]["frame_index"] == "5"
     assert rows[0]["timestamp_s"] == "0.25"
     assert rows[0]["selected_target_track_id"] == "3"
+    assert rows[0]["target_class"] == "car"
     assert rows[0]["selected_target_reason"] == "valid_safety_target"
+    assert rows[0]["distance_reason_codes"] == "ok"
+    assert rows[0]["ground_contact_row"] == "900.0"
     assert rows[0]["cais_score"] == "0.0"
     assert rows[0]["cais_ttc_threshold_s"] == "3.0"
     assert rows[0]["ttc_reason_codes"] == "ttc_missing"
@@ -156,6 +180,71 @@ def test_debug_csv_creation_and_expected_columns(tmp_path):
     assert rows[0]["crossing_reason_codes"] == "non_vru_class"
     assert rows[0]["cutin_warning_eligible"] == "True"
     assert rows[0]["cutin_target_track_id"] == "3"
+
+
+def test_detection_debug_csv_creation_and_expected_columns(tmp_path):
+    output_path = tmp_path / "detection_debug.csv"
+    det = Detection(BBox2D(10, 20, 110, 220), ObjectClass.CAR, 0.86)
+    det.track_id = 9
+    det.distance_m = 11.5
+    det.ttc_s = 3.2
+    det.metadata.update(
+        {
+            "bbox_clipped": False,
+            "distance_ground_m": 12.0,
+            "distance_semantic_m": 13.0,
+            "distance_fused_camera_m": 12.5,
+            "distance_bumper_m": 11.05,
+            "distance_confidence": 0.4,
+            "distance_valid_for_safety": False,
+            "distance_reason_codes": "near_horizon,tiny_bbox",
+            "ground_semantic_ratio": 1.08,
+            "bbox_area_ratio": 0.01,
+            "ground_contact_row": 620.0,
+            "horizon_y": 640.0,
+            "near_horizon_margin_px": 40.0,
+            "is_side_object": True,
+            "is_near_boundary": False,
+            "is_tiny_bbox": True,
+            "target_relevance": 0.18,
+            "in_ego_corridor": False,
+            "side_state": "LEFT",
+            "cutin_state": "NONE",
+            "cutin_valid_for_safety": False,
+            "cutin_reason_codes": "corridor_entry_not_confirmed",
+            "crossing_state": "none",
+            "crossing_valid_for_safety": False,
+            "crossing_reason_codes": "non_vru_class",
+            "ttc_valid_for_safety": False,
+            "ttc_reason_codes": "invalid_distance_for_safety",
+            "track_predicted": False,
+            "missing_frames": 0.0,
+        }
+    )
+    output = PerceptionOutput(
+        detections=[det],
+        scene_quality=SceneQuality(),
+        mode="nominal",
+        safety_payload={},
+    )
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=DETECTION_DEBUG_CSV_COLUMNS)
+        writer.writeheader()
+        write_debug_detections_csv_rows(writer, 12, 0.4, output)
+
+    with open(output_path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    assert reader.fieldnames == DETECTION_DEBUG_CSV_COLUMNS
+    assert len(rows) == 1
+    assert rows[0]["frame_index"] == "12"
+    assert rows[0]["track_id"] == "9"
+    assert rows[0]["object_class"] == "car"
+    assert rows[0]["distance_valid_for_safety"] == "False"
+    assert rows[0]["distance_reason_codes"] == "near_horizon,tiny_bbox"
+    assert rows[0]["predicted_track"] == "False"
 
 
 def test_no_max_frames_means_no_artificial_frame_limit():

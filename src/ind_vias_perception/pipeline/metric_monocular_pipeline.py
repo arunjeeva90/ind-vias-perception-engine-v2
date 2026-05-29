@@ -55,6 +55,10 @@ class MetricMonocularPipeline:
             scene.turning_confirmation_count = yaw_result.turning_confirmation_count
             scene.median_dx = yaw_result.median_dx
             scene.flow_points = yaw_result.flow_points
+            scene.ego_motion_reason_codes = yaw_result.reason_codes
+            scene.ego_motion_feature_count = yaw_result.feature_count
+            scene.ego_motion_roi_shape = yaw_result.roi_shape
+            scene.ego_motion_downscale_factor = yaw_result.downscale_factor
 
         detections = self.ground_contact_head.forward(detections, packet)
         detections = self.depth_head.forward(detections, packet)
@@ -89,17 +93,23 @@ class MetricMonocularPipeline:
                 self.settings.vehicle.camera_to_front_bumper_offset_m,
             )
             det.metadata["distance_bumper_m"] = float(det.distance_m)
+            distance_quality_cfg = {
+                **self.settings.raw.get("distance_quality", {}),
+                "min_distance_m": self.settings.camera.min_distance_m,
+                "max_distance_m": self.settings.camera.max_distance_m,
+            }
             confidence, relevance, valid, reasons = evaluate_distance_quality(
                 det,
                 packet.frame.shape[1],
                 packet.frame.shape[0],
                 self.settings.camera.horizon_v_px,
-                self.settings.raw.get("distance_quality", {}),
+                distance_quality_cfg,
             )
             det.metadata["distance_confidence"] = confidence
             det.metadata["target_relevance"] = relevance
             det.metadata["distance_valid_for_safety"] = valid
             det.metadata["reason_codes"] = ",".join(reasons)
+            det.metadata["distance_reason_codes"] = ",".join(reasons)
             det.metadata["ego_motion_state"] = scene.ego_motion_state
             if yaw_result is not None:
                 det.metadata["yaw_score"] = yaw_result.yaw_score
@@ -109,6 +119,10 @@ class MetricMonocularPipeline:
                 )
                 det.metadata["median_dx"] = yaw_result.median_dx
                 det.metadata["flow_points"] = float(yaw_result.flow_points)
+                det.metadata["ego_motion_reason_codes"] = yaw_result.reason_codes
+                det.metadata["ego_motion_feature_count"] = float(yaw_result.feature_count)
+                det.metadata["ego_motion_roi_shape"] = yaw_result.roi_shape
+                det.metadata["ego_motion_downscale_factor"] = yaw_result.downscale_factor
             det.sigma_depth = max(det.sigma_depth, 0.35 if source == "fused" else 0.55)
 
         detections = self.tracker.update(detections, packet.timestamp_s)

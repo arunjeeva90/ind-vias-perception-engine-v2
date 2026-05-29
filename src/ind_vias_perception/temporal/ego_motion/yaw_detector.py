@@ -16,6 +16,10 @@ class YawDetectionResult:
     ego_motion_state: str = "straight"
     yaw_confidence: float = 0.0
     turning_confirmation_count: int = 0
+    reason_codes: str = "ok"
+    feature_count: int = 0
+    roi_shape: str = ""
+    downscale_factor: float = 1.0
 
 
 class OpticalFlowYawDetector:
@@ -26,35 +30,105 @@ class OpticalFlowYawDetector:
         yaw_score_threshold: float = 0.55,
         smoothing_window: int = 5,
         required_turning_frames: int = 3,
+        max_feature_width: int = 640,
+        max_feature_height: int = 640,
+        max_corners: int = 120,
+        quality_level: float = 0.01,
+        min_distance: float = 12.0,
+        block_size: int = 7,
+        roi_top_ratio: float = 0.35,
+        roi_bottom_ratio: float = 0.90,
     ):
         self.min_flow_points = min_flow_points
         self.median_dx_threshold = median_dx_threshold
         self.yaw_score_threshold = yaw_score_threshold
         self.smoothing_window = smoothing_window
         self.required_turning_frames = required_turning_frames
+        self.max_feature_width = max_feature_width
+        self.max_feature_height = max_feature_height
+        self.max_corners = max_corners
+        self.quality_level = quality_level
+        self.min_distance = min_distance
+        self.block_size = block_size
+        self.roi_top_ratio = roi_top_ratio
+        self.roi_bottom_ratio = roi_bottom_ratio
         self._history: deque[YawDetectionResult] = deque(maxlen=smoothing_window)
         self._prev_gray: np.ndarray | None = None
 
     def update(self, frame: np.ndarray) -> YawDetectionResult:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray, roi_shape, downscale = preprocess_frame_for_flow(
+            frame,
+            self.max_feature_width,
+            self.max_feature_height,
+            self.roi_top_ratio,
+            self.roi_bottom_ratio,
+        )
+        if gray is None:
+            self._prev_gray = None
+            return self._smooth(
+                YawDetectionResult(
+                    False,
+                    0.0,
+                    0.0,
+                    0,
+                    ego_motion_state="uncertain",
+                    reason_codes="ego_motion_feature_failure",
+                    roi_shape=roi_shape,
+                    downscale_factor=downscale,
+                )
+            )
         if self._prev_gray is None:
             self._prev_gray = gray
-            return self._smooth(YawDetectionResult(False, 0.0, 0.0, 0))
+            return self._smooth(
+                YawDetectionResult(
+                    False,
+                    0.0,
+                    0.0,
+                    0,
+                    reason_codes="initial_frame",
+                    roi_shape=roi_shape,
+                    downscale_factor=downscale,
+                )
+            )
+        if self._prev_gray.shape != gray.shape:
+            self._prev_gray = gray
+            return self._smooth(
+                YawDetectionResult(
+                    False,
+                    0.0,
+                    0.0,
+                    0,
+                    ego_motion_state="uncertain",
+                    reason_codes="ego_motion_feature_failure",
+                    roi_shape=roi_shape,
+                    downscale_factor=downscale,
+                )
+            )
 
-        prev_pts = cv2.goodFeaturesToTrack(
-            self._prev_gray,
-            maxCorners=200,
-            qualityLevel=0.01,
-            minDistance=7,
-        )
+        try:
+            prev_pts = cv2.goodFeaturesToTrack(
+                self._prev_gray,
+                maxCorners=self.max_corners,
+                qualityLevel=self.quality_level,
+                minDistance=self.min_distance,
+                blockSize=self.block_size,
+            )
+        except cv2.error:
+            self._prev_gray = gray
+            return self._failure("opencv_memory_error", roi_shape, downscale)
         if prev_pts is None:
             self._prev_gray = gray
-            return self._smooth(YawDetectionResult(False, 0.0, 0.0, 0))
+            return self._failure("ego_motion_feature_failure", roi_shape, downscale)
 
-        next_pts, status, _ = cv2.calcOpticalFlowPyrLK(self._prev_gray, gray, prev_pts, None)
+        feature_count = int(prev_pts.shape[0])
+        try:
+            next_pts, status, _ = cv2.calcOpticalFlowPyrLK(self._prev_gray, gray, prev_pts, None)
+        except cv2.error:
+            self._prev_gray = gray
+            return self._failure("ego_motion_feature_failure", roi_shape, downscale, feature_count)
         self._prev_gray = gray
         if next_pts is None or status is None:
-            return self._smooth(YawDetectionResult(False, 0.0, 0.0, 0))
+            return self._failure("ego_motion_feature_failure", roi_shape, downscale, feature_count)
         measurement = analyze_flow(
             prev_pts,
             next_pts,
@@ -62,6 +136,16 @@ class OpticalFlowYawDetector:
             min_flow_points=self.min_flow_points,
             median_dx_threshold=self.median_dx_threshold,
             yaw_score_threshold=self.yaw_score_threshold,
+        )
+        measurement = YawDetectionResult(
+            measurement.turning_detected,
+            measurement.yaw_score,
+            measurement.median_dx,
+            measurement.flow_points,
+            reason_codes=measurement.reason_codes,
+            feature_count=feature_count,
+            roi_shape=roi_shape,
+            downscale_factor=downscale,
         )
         return self._smooth(measurement)
 
@@ -95,7 +179,69 @@ class OpticalFlowYawDetector:
             ego_motion_state=state,
             yaw_confidence=confidence,
             turning_confirmation_count=turning_count,
+            reason_codes=measurement.reason_codes,
+            feature_count=measurement.feature_count,
+            roi_shape=measurement.roi_shape,
+            downscale_factor=measurement.downscale_factor,
         )
+
+    def _failure(
+        self,
+        reason: str,
+        roi_shape: str,
+        downscale: float,
+        feature_count: int = 0,
+    ) -> YawDetectionResult:
+        return self._smooth(
+            YawDetectionResult(
+                False,
+                0.0,
+                0.0,
+                0,
+                ego_motion_state="uncertain",
+                yaw_confidence=0.0,
+                reason_codes=reason,
+                feature_count=feature_count,
+                roi_shape=roi_shape,
+                downscale_factor=downscale,
+            )
+        )
+
+
+def preprocess_frame_for_flow(
+    frame: np.ndarray,
+    max_width: int,
+    max_height: int,
+    roi_top_ratio: float,
+    roi_bottom_ratio: float,
+) -> tuple[np.ndarray | None, str, float]:
+    if frame is None or frame.size == 0:
+        return None, "", 1.0
+    if frame.ndim == 2:
+        gray = frame
+    elif frame.ndim == 3 and frame.shape[2] == 3:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    elif frame.ndim == 3 and frame.shape[2] == 4:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+    else:
+        return None, "", 1.0
+    if gray.dtype != np.uint8:
+        gray = np.clip(gray, 0, 255).astype(np.uint8)
+    height, width = gray.shape[:2]
+    top = int(max(0, min(height - 1, round(height * roi_top_ratio))))
+    bottom = int(max(top + 1, min(height, round(height * roi_bottom_ratio))))
+    roi = gray[top:bottom, :]
+    if roi.size == 0 or roi.shape[0] < 2 or roi.shape[1] < 2:
+        return None, f"{roi.shape[0]}x{roi.shape[1]}" if roi.ndim == 2 else "", 1.0
+    scale = min(max_width / roi.shape[1], max_height / roi.shape[0], 1.0)
+    if scale < 1.0:
+        roi = cv2.resize(
+            roi,
+            (max(1, int(round(roi.shape[1] * scale))), max(1, int(round(roi.shape[0] * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+    roi = np.ascontiguousarray(roi, dtype=np.uint8)
+    return roi, f"{roi.shape[0]}x{roi.shape[1]}", scale
 
 
 def analyze_flow(

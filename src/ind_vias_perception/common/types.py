@@ -94,6 +94,10 @@ class SceneQuality:
     turning_confirmation_count: int = 0
     median_dx: float = 0.0
     flow_points: int = 0
+    ego_motion_reason_codes: str = "ok"
+    ego_motion_feature_count: int = 0
+    ego_motion_roi_shape: str = ""
+    ego_motion_downscale_factor: float = 1.0
 
     @property
     def degraded_score(self) -> float:

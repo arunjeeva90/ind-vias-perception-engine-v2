@@ -5,7 +5,7 @@ import csv
 from pathlib import Path
 
 import cv2
-from ind_vias_perception.common.types import FramePacket, PerceptionOutput
+from ind_vias_perception.common.types import Detection, FramePacket, PerceptionOutput
 from ind_vias_perception.config.settings import load_settings
 from ind_vias_perception.pipeline.factory import build_pipeline
 from ind_vias_perception.apps.visualization import draw_perception_output
@@ -15,6 +15,7 @@ DEBUG_CSV_COLUMNS = [
     "frame_index",
     "timestamp_s",
     "selected_target_track_id",
+    "target_class",
     "selected_target_valid_for_safety",
     "selected_target_reason",
     "debug_target_track_id",
@@ -23,12 +24,31 @@ DEBUG_CSV_COLUMNS = [
     "target_ttc_s",
     "target_in_ego_corridor",
     "target_relevance",
+    "distance_confidence",
+    "distance_reason_codes",
+    "distance_ground_m",
+    "distance_semantic_m",
+    "distance_fused_camera_m",
+    "distance_bumper_m",
+    "distance_source",
+    "ground_semantic_ratio",
+    "bbox_area_ratio",
+    "ground_contact_row",
+    "horizon_y",
+    "near_horizon_margin_px",
+    "is_side_object",
+    "is_near_boundary",
+    "is_tiny_bbox",
     "raw_warning_level",
     "confirmed_warning_level",
     "warning_candidate",
     "warning_suppressed_reason",
     "ego_motion_state",
     "yaw_confidence",
+    "ego_motion_reason_codes",
+    "ego_motion_feature_count",
+    "ego_motion_roi_shape",
+    "ego_motion_downscale_factor",
     "cais_mode",
     "cais_score",
     "cais_reason_codes",
@@ -69,6 +89,48 @@ DEBUG_CSV_COLUMNS = [
     "sentinel_state",
 ]
 
+DETECTION_DEBUG_CSV_COLUMNS = [
+    "frame_index",
+    "timestamp_s",
+    "track_id",
+    "object_class",
+    "confidence",
+    "bbox_x1",
+    "bbox_y1",
+    "bbox_x2",
+    "bbox_y2",
+    "bbox_clipped",
+    "distance_ground_m",
+    "distance_semantic_m",
+    "distance_fused_camera_m",
+    "distance_bumper_m",
+    "distance_confidence",
+    "distance_valid_for_safety",
+    "distance_reason_codes",
+    "ground_semantic_ratio",
+    "bbox_area_ratio",
+    "ground_contact_row",
+    "horizon_y",
+    "near_horizon_margin_px",
+    "is_side_object",
+    "is_near_boundary",
+    "is_tiny_bbox",
+    "target_relevance",
+    "target_in_ego_corridor",
+    "side_state",
+    "cutin_state",
+    "cutin_valid_for_safety",
+    "cutin_reason_codes",
+    "crossing_state",
+    "crossing_valid_for_safety",
+    "crossing_reason_codes",
+    "ttc_s",
+    "ttc_valid_for_safety",
+    "ttc_reason_codes",
+    "predicted_track",
+    "missing_frames",
+]
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
@@ -80,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--debug-overlay", action="store_true")
     parser.add_argument("--debug-csv", default=None)
+    parser.add_argument("--debug-detections-csv", default=None)
     return parser
 
 
@@ -107,6 +170,15 @@ def main() -> None:
             ego_corridor=ego_corridor,
         )
         print(out.safety_payload)
+        if args.debug_detections_csv is not None:
+            det_csv_file, det_writer = _open_debug_csv(
+                args.debug_detections_csv,
+                DETECTION_DEBUG_CSV_COLUMNS,
+            )
+            try:
+                write_debug_detections_csv_rows(det_writer, 0, 0.0, out)
+            finally:
+                det_csv_file.close()
         if args.output is not None:
             if not cv2.imwrite(args.output, annotated):
                 raise SystemExit(f"Could not write image: {args.output}")
@@ -139,13 +211,15 @@ def main() -> None:
     writer = None
     debug_csv_file = None
     debug_csv_writer = None
+    debug_detections_csv_file = None
+    debug_detections_csv_writer = None
     if args.debug_csv is not None:
-        debug_csv_path = Path(args.debug_csv)
-        if debug_csv_path.parent != Path("."):
-            debug_csv_path.parent.mkdir(parents=True, exist_ok=True)
-        debug_csv_file = open(debug_csv_path, "w", newline="", encoding="utf-8")
-        debug_csv_writer = csv.DictWriter(debug_csv_file, fieldnames=DEBUG_CSV_COLUMNS)
-        debug_csv_writer.writeheader()
+        debug_csv_file, debug_csv_writer = _open_debug_csv(args.debug_csv, DEBUG_CSV_COLUMNS)
+    if args.debug_detections_csv is not None:
+        debug_detections_csv_file, debug_detections_csv_writer = _open_debug_csv(
+            args.debug_detections_csv,
+            DETECTION_DEBUG_CSV_COLUMNS,
+        )
     i = 0
     try:
         while should_process_frame(i, args.max_frames):
@@ -156,6 +230,13 @@ def main() -> None:
             out = pipeline.process(FramePacket(frame=frame, timestamp_s=timestamp_s, frame_id=i))
             if debug_csv_writer is not None:
                 write_debug_csv_row(debug_csv_writer, i, timestamp_s, out)
+            if debug_detections_csv_writer is not None:
+                write_debug_detections_csv_rows(
+                    debug_detections_csv_writer,
+                    i,
+                    timestamp_s,
+                    out,
+                )
             annotated = draw_perception_output(
                 frame,
                 out,
@@ -170,7 +251,6 @@ def main() -> None:
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                     writer = cv2.VideoWriter(args.output, fourcc, fps, (width, height))
                     if not writer.isOpened():
-                        cap.release()
                         raise SystemExit(f"Could not write video: {args.output}")
                 writer.write(annotated)
             if args.show:
@@ -181,11 +261,13 @@ def main() -> None:
     finally:
         if debug_csv_file is not None:
             debug_csv_file.close()
-    cap.release()
-    if writer is not None:
-        writer.release()
-    if args.show:
-        cv2.destroyAllWindows()
+        if debug_detections_csv_file is not None:
+            debug_detections_csv_file.close()
+        cap.release()
+        if writer is not None:
+            writer.release()
+        if args.show:
+            cv2.destroyAllWindows()
 
 
 def write_debug_csv_row(
@@ -200,6 +282,7 @@ def write_debug_csv_row(
             "frame_index": frame_index,
             "timestamp_s": timestamp_s,
             "selected_target_track_id": payload.get("target_track_id"),
+            "target_class": payload.get("target_class"),
             "selected_target_valid_for_safety": payload.get("selected_target_valid_for_safety"),
             "selected_target_reason": payload.get("selected_target_reason"),
             "debug_target_track_id": payload.get("debug_target_track_id"),
@@ -210,12 +293,31 @@ def write_debug_csv_row(
             "target_ttc_s": payload.get("target_ttc_s"),
             "target_in_ego_corridor": payload.get("target_in_ego_corridor"),
             "target_relevance": payload.get("target_relevance"),
+            "distance_confidence": payload.get("distance_confidence"),
+            "distance_reason_codes": payload.get("distance_reason_codes"),
+            "distance_ground_m": payload.get("distance_ground_m"),
+            "distance_semantic_m": payload.get("distance_semantic_m"),
+            "distance_fused_camera_m": payload.get("distance_fused_camera_m"),
+            "distance_bumper_m": payload.get("distance_bumper_m"),
+            "distance_source": payload.get("distance_source"),
+            "ground_semantic_ratio": payload.get("ground_semantic_ratio"),
+            "bbox_area_ratio": payload.get("bbox_area_ratio"),
+            "ground_contact_row": payload.get("ground_contact_row"),
+            "horizon_y": payload.get("horizon_y"),
+            "near_horizon_margin_px": payload.get("near_horizon_margin_px"),
+            "is_side_object": payload.get("is_side_object"),
+            "is_near_boundary": payload.get("is_near_boundary"),
+            "is_tiny_bbox": payload.get("is_tiny_bbox"),
             "raw_warning_level": payload.get("raw_warning_level"),
             "confirmed_warning_level": payload.get("confirmed_warning_level"),
             "warning_candidate": payload.get("warning_candidate"),
             "warning_suppressed_reason": payload.get("warning_suppressed_reason"),
             "ego_motion_state": payload.get("ego_motion_state"),
             "yaw_confidence": payload.get("yaw_confidence"),
+            "ego_motion_reason_codes": payload.get("ego_motion_reason_codes"),
+            "ego_motion_feature_count": payload.get("ego_motion_feature_count"),
+            "ego_motion_roi_shape": payload.get("ego_motion_roi_shape"),
+            "ego_motion_downscale_factor": payload.get("ego_motion_downscale_factor"),
             "cais_mode": payload.get("cais_mode"),
             "cais_score": payload.get("cais_score"),
             "cais_reason_codes": payload.get("cais_reason_codes"),
@@ -256,6 +358,73 @@ def write_debug_csv_row(
             "sentinel_state": payload.get("sentinel_state"),
         }
     )
+
+
+def write_debug_detections_csv_rows(
+    writer: csv.DictWriter,
+    frame_index: int,
+    timestamp_s: float,
+    output: PerceptionOutput,
+) -> None:
+    for det in output.detections:
+        writer.writerow(_detection_debug_row(frame_index, timestamp_s, det))
+
+
+def _detection_debug_row(frame_index: int, timestamp_s: float, det: Detection) -> dict[str, object]:
+    return {
+        "frame_index": frame_index,
+        "timestamp_s": timestamp_s,
+        "track_id": det.track_id,
+        "object_class": det.label.value,
+        "confidence": det.confidence,
+        "bbox_x1": det.bbox.x1,
+        "bbox_y1": det.bbox.y1,
+        "bbox_x2": det.bbox.x2,
+        "bbox_y2": det.bbox.y2,
+        "bbox_clipped": det.metadata.get("bbox_clipped"),
+        "distance_ground_m": det.metadata.get("distance_ground_m"),
+        "distance_semantic_m": det.metadata.get("distance_semantic_m"),
+        "distance_fused_camera_m": det.metadata.get("distance_fused_camera_m"),
+        "distance_bumper_m": det.metadata.get("distance_bumper_m"),
+        "distance_confidence": det.metadata.get("distance_confidence"),
+        "distance_valid_for_safety": det.metadata.get("distance_valid_for_safety"),
+        "distance_reason_codes": det.metadata.get(
+            "distance_reason_codes",
+            det.metadata.get("reason_codes"),
+        ),
+        "ground_semantic_ratio": det.metadata.get("ground_semantic_ratio"),
+        "bbox_area_ratio": det.metadata.get("bbox_area_ratio"),
+        "ground_contact_row": det.metadata.get("ground_contact_row"),
+        "horizon_y": det.metadata.get("horizon_y"),
+        "near_horizon_margin_px": det.metadata.get("near_horizon_margin_px"),
+        "is_side_object": det.metadata.get("is_side_object"),
+        "is_near_boundary": det.metadata.get("is_near_boundary"),
+        "is_tiny_bbox": det.metadata.get("is_tiny_bbox"),
+        "target_relevance": det.metadata.get("target_relevance"),
+        "target_in_ego_corridor": det.metadata.get("in_ego_corridor"),
+        "side_state": det.metadata.get("side_state"),
+        "cutin_state": det.metadata.get("cutin_state"),
+        "cutin_valid_for_safety": det.metadata.get("cutin_valid_for_safety"),
+        "cutin_reason_codes": det.metadata.get("cutin_reason_codes"),
+        "crossing_state": det.metadata.get("crossing_state"),
+        "crossing_valid_for_safety": det.metadata.get("crossing_valid_for_safety"),
+        "crossing_reason_codes": det.metadata.get("crossing_reason_codes"),
+        "ttc_s": det.ttc_s,
+        "ttc_valid_for_safety": det.metadata.get("ttc_valid_for_safety"),
+        "ttc_reason_codes": det.metadata.get("ttc_reason_codes"),
+        "predicted_track": det.metadata.get("track_predicted"),
+        "missing_frames": det.metadata.get("missing_frames"),
+    }
+
+
+def _open_debug_csv(path: str, columns: list[str]):
+    csv_path = Path(path)
+    if csv_path.parent != Path("."):
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+    writer = csv.DictWriter(csv_file, fieldnames=columns)
+    writer.writeheader()
+    return csv_file, writer
 
 
 def should_process_frame(frame_index: int, max_frames: int | None) -> bool:

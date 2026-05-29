@@ -88,7 +88,7 @@ def draw_perception_output(
                 f"confD={_format_float(det.metadata.get('distance_confidence'))} "
                 f"rel={_format_float(det.metadata.get('target_relevance'))} "
                 f"valid={det.metadata.get('distance_valid_for_safety', 'n/a')} "
-                f"reason={det.metadata.get('reason_codes', 'n/a')} "
+                f"{_distance_reason_text(det)}"
                 f"bbox_clipped={det.metadata.get('bbox_clipped', 'n/a')} "
                 f"side={det.metadata.get('side_state', 'n/a')} "
                 f"cutin={det.metadata.get('cutin_state', 'NONE')} "
@@ -178,3 +178,10 @@ def _format_float(value: object) -> str:
     if not isinstance(value, (float, int)):
         return "n/a"
     return f"{float(value):.1f}"
+
+
+def _distance_reason_text(det) -> str:
+    if det.metadata.get("distance_valid_for_safety", True):
+        return ""
+    reason = det.metadata.get("distance_reason_codes", det.metadata.get("reason_codes", "n/a"))
+    return f"reason={reason} "
