@@ -95,6 +95,22 @@ pytest
 ind-vias-inspect
 ```
 
+## Running the standalone DMS demo
+
+The IND-VIAS DualSight DMS v0.1 prototype is a separate executable from the forward perception demo:
+
+```powershell
+python apps/run_dms_demo.py --video examples/dms.mp4 --output outputs/dms_demo.mp4 --jsonl outputs/dms_state.jsonl --debug-overlay
+```
+
+For webcam input:
+
+```powershell
+python apps/run_dms_demo.py --camera 0 --debug-overlay --display
+```
+
+The default DMS face backend uses MediaPipe Face Mesh. If it is not installed, install the optional DMS dependency with `pip install -e ".[dms]"`.
+
 ## Atomic source layout
 
 ```text
