@@ -15,12 +15,32 @@ class DistractionFSM:
         gaze_zone: GazeZone,
         eyes_off_road_duration_ms: int,
         no_face_duration_ms: int = 0,
+        phone_state: str = "UNKNOWN",
     ) -> tuple[DistractionLevel, DistractionType]:
         if no_face_duration_ms >= self.config.no_face_timeout_ms:
             self.level = DistractionLevel.UNKNOWN
             self.type = DistractionType.UNKNOWN
             return self.level, self.type
-        if gaze_zone in {GazeZone.DOWN, GazeZone.PHONE_DOWN} and eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms:
+        if phone_state == "TEXTING_SUSPECTED":
+            self.level = DistractionLevel.HIGH
+            self.type = DistractionType.PHONE_SUSPECTED
+        elif phone_state == "PHONE_TO_EAR_SUSPECTED":
+            self.level = (
+                DistractionLevel.HIGH
+                if eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms
+                else DistractionLevel.MEDIUM
+            )
+            self.type = DistractionType.PHONE_SUSPECTED
+        elif phone_state == "PHONE_DOWN_SUSPECTED":
+            self.level = DistractionLevel.MEDIUM
+            self.type = DistractionType.PHONE_SUSPECTED
+        elif phone_state == "HAND_NEAR_FACE":
+            self.level = DistractionLevel.LOW
+            self.type = DistractionType.PHONE_SUSPECTED
+        elif (
+            gaze_zone in {GazeZone.DOWN, GazeZone.PHONE_DOWN}
+            and eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms
+        ):
             self.level = DistractionLevel.HIGH
             self.type = DistractionType.PHONE_SUSPECTED
         elif eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms * 2:
