@@ -20,6 +20,10 @@ Top-level fields:
 
 `phone_use` and `seatbelt_authenticity` are placeholders in v0.1 and return `UNKNOWN` with confidence `0.0`.
 
+In v0.1.2, `phone_use.state` may also report `NO_PHONE`, `PHONE_TO_EAR_SUSPECTED`, `PHONE_DOWN_SUSPECTED`, `TEXTING_SUSPECTED`, or `HAND_NEAR_FACE`. These are heuristic states, not object-detection claims.
+
+`gaze.zone` is camera-mount calibrated. A raw frontal face relative to the DMS camera is classified as `ROAD` only when it falls within the configured road yaw/pitch offsets and tolerances.
+
 ## Future ADAS Input Packet
 
 `ADASInputPacket` is a placeholder for forward perception risk data, including timestamp, forward risk level, and reason codes. It is not consumed by v0.1.

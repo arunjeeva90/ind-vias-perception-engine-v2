@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug-overlay", action="store_true")
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--display", action="store_true")
+    parser.add_argument("--status-window", action="store_true")
     return parser
 
 
@@ -63,22 +64,52 @@ def main() -> None:
 
             annotated = frame
             if args.debug_overlay or config.overlay_enabled:
-                annotated = overlay.draw(
+                use_status_window = args.status_window or config.status_window_enabled
+                draw_panel = (
+                    config.telemetry_panel_enabled
+                    and config.overlay_panel_embedded
+                    and not use_status_window
+                )
+                annotated = overlay.draw_video_overlay(
                     frame,
                     state,
                     context["face"],
                     context["head_pose"],
                     float(context["fps"]),
-                    telemetry_enabled=config.telemetry_panel_enabled,
+                    draw_panel=draw_panel,
+                    max_axis_length_px=config.max_axis_length_px,
+                    max_gaze_vector_length_px=config.max_gaze_vector_length_px,
+                    draw_pose_axes=config.draw_pose_axes,
+                    draw_gaze_vector=config.draw_gaze_vector,
                 )
             if args.output is not None:
                 if writer is None:
                     writer = make_video_writer(args.output, fps, annotated)
                 writer.write(annotated)
             if args.display:
-                cv2.imshow("IND-VIAS DualSight DMS", annotated)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
+                if args.status_window or config.status_window_enabled:
+                    cv2.imshow("IND-VIAS DualSight DMS - Video", annotated)
+                    status = overlay.render_status_dashboard(
+                        state,
+                        float(context["fps"]),
+                        road_yaw_offset_deg=pipeline.gaze_estimator.yaw_offset_deg,
+                        road_pitch_offset_deg=pipeline.gaze_estimator.pitch_offset_deg,
+                    )
+                    cv2.imshow("IND-VIAS DualSight DMS - Status", status)
+                else:
+                    cv2.imshow("IND-VIAS DualSight DMS", annotated)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
                     break
+                if key == ord("c"):
+                    yaw, pitch = pipeline.calibrate_road_gaze(
+                        state.gaze.head_yaw_deg,
+                        state.gaze.head_pitch_deg,
+                    )
+                    print(f"Road gaze calibrated: yaw_offset={yaw:.2f}, pitch_offset={pitch:.2f}")
+                elif key == ord("r"):
+                    yaw, pitch = pipeline.reset_road_gaze_calibration()
+                    print(f"Road gaze calibrated: yaw_offset={yaw:.2f}, pitch_offset={pitch:.2f}")
             frame_id += 1
     finally:
         cap.release()

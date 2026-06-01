@@ -16,18 +16,50 @@ class GazeEstimate:
 class GazeEstimator:
     def __init__(self, config: DMSConfig) -> None:
         self.config = config
+        self.down_since_ms: int | None = None
+        self.yaw_offset_deg = config.road_center_yaw_offset_deg
+        self.pitch_offset_deg = config.road_center_pitch_offset_deg
 
-    def estimate(self, head_pose: HeadPose) -> GazeEstimate:
-        if head_pose.confidence <= 0:
+    def calibrate_road_center(self, yaw_deg: float, pitch_deg: float) -> None:
+        self.yaw_offset_deg = yaw_deg
+        self.pitch_offset_deg = pitch_deg
+
+    def reset_road_center(self) -> None:
+        self.yaw_offset_deg = self.config.road_center_yaw_offset_deg
+        self.pitch_offset_deg = self.config.road_center_pitch_offset_deg
+
+    def estimate(
+        self,
+        head_pose: HeadPose,
+        timestamp_ms: int,
+        face_present: bool = True,
+    ) -> GazeEstimate:
+        if not face_present or head_pose.confidence < self.config.head_pose_min_confidence:
+            self.down_since_ms = None
             return GazeEstimate()
-        if head_pose.pitch_deg > self.config.head_pitch_down_threshold_deg + 10:
-            return GazeEstimate(GazeZone.PHONE_DOWN, 0.65)
-        if head_pose.pitch_deg > self.config.head_pitch_down_threshold_deg:
-            return GazeEstimate(GazeZone.DOWN, 0.7)
-        if head_pose.pitch_deg < self.config.head_pitch_up_threshold_deg:
-            return GazeEstimate(GazeZone.UP, 0.6)
-        if head_pose.yaw_deg < self.config.head_yaw_left_threshold_deg:
+        if abs(head_pose.pitch_deg) > self.config.head_pose_outlier_threshold_deg:
+            self.down_since_ms = None
+            return GazeEstimate()
+        relative_yaw = head_pose.yaw_deg
+        relative_pitch = head_pose.pitch_deg
+        if self.config.road_gaze_calibration_enabled:
+            relative_yaw -= self.yaw_offset_deg
+            relative_pitch -= self.pitch_offset_deg
+        yaw_tolerance = self.config.road_yaw_tolerance_deg
+        pitch_tolerance = self.config.road_pitch_tolerance_deg
+        if relative_yaw < -yaw_tolerance:
+            self.down_since_ms = None
             return GazeEstimate(GazeZone.LEFT, 0.75)
-        if head_pose.yaw_deg > self.config.head_yaw_right_threshold_deg:
+        if relative_yaw > yaw_tolerance:
+            self.down_since_ms = None
             return GazeEstimate(GazeZone.RIGHT, 0.75)
+        if relative_pitch > pitch_tolerance:
+            if self.down_since_ms is None:
+                self.down_since_ms = timestamp_ms
+            if timestamp_ms - self.down_since_ms >= self.config.phone_down_sustain_ms:
+                return GazeEstimate(GazeZone.PHONE_DOWN, 0.7)
+            return GazeEstimate(GazeZone.DOWN, 0.7)
+        self.down_since_ms = None
+        if relative_pitch < -pitch_tolerance:
+            return GazeEstimate(GazeZone.UP, 0.6)
         return GazeEstimate(GazeZone.ROAD, 0.8)
