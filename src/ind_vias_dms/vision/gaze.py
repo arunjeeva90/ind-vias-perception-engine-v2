@@ -19,14 +19,17 @@ class GazeEstimator:
         self.down_since_ms: int | None = None
         self.yaw_offset_deg = config.road_center_yaw_offset_deg
         self.pitch_offset_deg = config.road_center_pitch_offset_deg
+        self.road_gaze_calibrated = config.road_gaze_calibrated
 
     def calibrate_road_center(self, yaw_deg: float, pitch_deg: float) -> None:
         self.yaw_offset_deg = yaw_deg
         self.pitch_offset_deg = pitch_deg
+        self.road_gaze_calibrated = True
 
     def reset_road_center(self) -> None:
         self.yaw_offset_deg = self.config.road_center_yaw_offset_deg
         self.pitch_offset_deg = self.config.road_center_pitch_offset_deg
+        self.road_gaze_calibrated = self.config.road_gaze_calibrated
 
     def estimate(
         self,

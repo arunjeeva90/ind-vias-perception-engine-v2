@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from math import dist
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -10,6 +11,7 @@ import numpy as np
 
 from ind_vias_dms.core.config import DMSConfig
 from ind_vias_dms.core.types import GazeZone, PlaceholderState
+from ind_vias_dms.vision.face_landmarks import FaceLandmarkResult
 
 
 class MobileDistractionState(str, Enum):
@@ -26,7 +28,18 @@ class HandContext:
     near_face: bool = False
     near_ear: bool = False
     lower_region: bool = False
+    ear_side: str = "UNKNOWN"
+    hand_bbox_norm: tuple[float, float, float, float] | None = None
     confidence: float = 0.0
+
+
+@dataclass
+class PhoneObjectResult:
+    detected: bool = False
+    bbox_norm: tuple[float, float, float, float] | None = None
+    confidence: float = 0.0
+    region: str = "UNKNOWN"
+    backend_status: str = "NOT_CONFIGURED"
 
 
 class MobileDistractionEstimator:
@@ -36,6 +49,13 @@ class MobileDistractionEstimator:
         self.phone_to_ear_since_ms: int | None = None
         self.texting_since_ms: int | None = None
         self._hands: Any | None = None
+        self.last_phone_object = PhoneObjectResult()
+        self._phone_object_cfg = config.phone_object_detection or {}
+        self._phone_object_enabled = bool(self._phone_object_cfg.get("enabled", False))
+        self._phone_object_model_path = str(self._phone_object_cfg.get("model_path", ""))
+        self._phone_object_allow_missing = bool(self._phone_object_cfg.get("allow_missing_model", True))
+        if self._phone_object_enabled:
+            self._init_phone_object_backend()
         if not config.mobile_distraction_enabled:
             return
         try:
@@ -63,24 +83,93 @@ class MobileDistractionEstimator:
         hand = self._estimate_hand_context(frame, face_bbox, face_landmarks)
         gaze_down = gaze_zone in {GazeZone.DOWN, GazeZone.PHONE_DOWN}
         self._update_timer("down_since_ms", timestamp_ms, gaze_down)
-        self._update_timer("phone_to_ear_since_ms", timestamp_ms, hand.near_ear)
+        self._update_timer(
+            "phone_to_ear_since_ms",
+            timestamp_ms,
+            hand.near_ear and hand.confidence >= self.config.phone_to_ear_min_hand_confidence,
+        )
         self._update_timer("texting_since_ms", timestamp_ms, gaze_down and hand.lower_region)
 
+        return self._classify_from_context(hand, gaze_down, timestamp_ms)
+
+    def _classify_from_context(
+        self,
+        hand: HandContext,
+        gaze_down: bool,
+        timestamp_ms: int,
+    ) -> PlaceholderState:
         if self._elapsed(self.texting_since_ms, timestamp_ms) >= self.config.texting_sustain_ms:
             return PlaceholderState(MobileDistractionState.TEXTING_SUSPECTED.value, 0.8)
         if (
             self._elapsed(self.phone_to_ear_since_ms, timestamp_ms)
             >= self.config.phone_to_ear_sustain_ms
         ):
-            return PlaceholderState(MobileDistractionState.PHONE_TO_EAR_SUSPECTED.value, 0.78)
-        if self._elapsed(self.down_since_ms, timestamp_ms) >= self.config.phone_down_sustain_ms:
+            return PlaceholderState(
+                MobileDistractionState.PHONE_TO_EAR_SUSPECTED.value,
+                max(0.78, min(0.95, hand.confidence)),
+            )
+        if self._elapsed(self.down_since_ms, timestamp_ms) >= self.config.phone_down_suspect_ms:
             return PlaceholderState(MobileDistractionState.PHONE_DOWN_SUSPECTED.value, 0.65)
         if hand.near_face:
             return PlaceholderState(MobileDistractionState.HAND_NEAR_FACE.value, 0.45)
         return PlaceholderState(MobileDistractionState.NO_MOBILE_DISTRACTION.value, 0.6)
 
+    def process_cabin(
+        self,
+        frame: np.ndarray,
+        faces: list[tuple[int, str, FaceLandmarkResult | None]],
+        driver_track_id: int | None,
+        gaze_zone: GazeZone,
+        timestamp_ms: int,
+    ) -> tuple[PlaceholderState, list[str]]:
+        driver_state = PlaceholderState(MobileDistractionState.UNKNOWN.value, 0.0)
+        cabin_events: list[str] = []
+        self.last_phone_object = self._detect_phone_object(frame)
+        ordered_faces = sorted(faces, key=lambda item: item[0] != driver_track_id)
+        for track_id, zone, face in ordered_faces:
+            if face is None:
+                continue
+            state = self.process(
+                frame,
+                face.bbox,
+                face.landmarks_px,
+                gaze_zone if track_id == driver_track_id else GazeZone.UNKNOWN,
+                timestamp_ms,
+            )
+            if track_id == driver_track_id:
+                driver_state = state
+            elif state.state == MobileDistractionState.PHONE_TO_EAR_SUSPECTED.value:
+                cabin_events.append("PASSENGER_PHONE_TO_EAR")
+            elif state.state in {
+                MobileDistractionState.TEXTING_SUSPECTED.value,
+                MobileDistractionState.PHONE_DOWN_SUSPECTED.value,
+            }:
+                cabin_events.append(f"{zone}_{state.state}")
+        return driver_state, cabin_events
+
+    def _init_phone_object_backend(self) -> None:
+        if not self._phone_object_model_path:
+            self.last_phone_object = PhoneObjectResult(backend_status="MODEL_MISSING")
+            return
+        if not Path(self._phone_object_model_path).exists():
+            if self._phone_object_allow_missing:
+                self.last_phone_object = PhoneObjectResult(backend_status="MODEL_MISSING")
+                return
+            raise RuntimeError(f"Phone object detector model not found: {self._phone_object_model_path}")
+        # v0.2.3 keeps the object backend optional; posture detection continues until
+        # a reviewed ONNX phone detector is supplied.
+        self.last_phone_object = PhoneObjectResult(backend_status="MODEL_PRESENT_NOT_LOADED")
+
+    def _detect_phone_object(self, frame: np.ndarray) -> PhoneObjectResult:
+        if not getattr(self, "_phone_object_enabled", False):
+            return PhoneObjectResult(backend_status="NOT_CONFIGURED")
+        last = getattr(self, "last_phone_object", PhoneObjectResult())
+        if last.backend_status in {"MODEL_MISSING", "MODEL_PRESENT_NOT_LOADED"}:
+            return PhoneObjectResult(backend_status=last.backend_status)
+        return PhoneObjectResult(backend_status="NOT_IMPLEMENTED")
+
     def close(self) -> None:
-        if self._hands is not None:
+        if getattr(self, "_hands", None) is not None:
             self._hands.close()
 
     def _estimate_hand_context(
@@ -100,7 +189,9 @@ class MobileDistractionEstimator:
         face_w = max(1, x2 - x1)
         face_h = max(1, y2 - y1)
         threshold = max(face_w, face_h) * self.config.hand_near_face_distance_ratio
+        ear_threshold_px = max(width, height) * self.config.phone_to_ear_hand_distance_threshold_norm
         anchors = self._face_anchors(face_bbox, face_landmarks)
+        side_rois = self._ear_side_rois(face_bbox, width, height)
         context = HandContext()
         for hand_landmarks in result.multi_hand_landmarks:
             points = [(lm.x * width, lm.y * height) for lm in hand_landmarks.landmark]
@@ -110,13 +201,24 @@ class MobileDistractionEstimator:
                 sum(point[0] for point in points) / len(points),
                 sum(point[1] for point in points) / len(points),
             )
+            hx1, hy1 = min(point[0] for point in points), min(point[1] for point in points)
+            hx2, hy2 = max(point[0] for point in points), max(point[1] for point in points)
+            hand_bbox_norm = (hx1 / width, hy1 / height, hx2 / width, hy2 / height)
             if min(dist(hand_center, anchor) for anchor in anchors["face"]) <= threshold:
                 context.near_face = True
-            if min(dist(hand_center, anchor) for anchor in anchors["ear"]) <= threshold:
+            ear_distance = min(dist(hand_center, anchor) for anchor in anchors["ear"])
+            side_hit = self._point_in_roi(hand_center, side_rois["left"]) or self._point_in_roi(hand_center, side_rois["right"])
+            wrist_side_hit = self._point_in_roi(wrist, side_rois["left"]) or self._point_in_roi(wrist, side_rois["right"])
+            index_side_hit = self._point_in_roi(index_tip, side_rois["left"]) or self._point_in_roi(index_tip, side_rois["right"])
+            if ear_distance <= min(threshold, ear_threshold_px) or side_hit or wrist_side_hit or index_side_hit:
                 context.near_ear = True
+                context.ear_side = "LEFT" if self._point_in_roi(hand_center, side_rois["left"]) else "RIGHT"
             if wrist[1] > y2 and index_tip[1] > y1 + face_h * 0.5:
                 context.lower_region = True
+            context.hand_bbox_norm = hand_bbox_norm
             context.confidence = max(context.confidence, 0.65)
+            if context.near_ear:
+                context.confidence = max(context.confidence, 0.82)
         return context
 
     def _face_anchors(
@@ -134,6 +236,27 @@ class MobileDistractionEstimator:
             mouth = face_landmarks.get(13, mouth)
             nose = face_landmarks.get(1, nose)
         return {"face": [left_ear, right_ear, mouth, nose], "ear": [left_ear, right_ear]}
+
+    def _ear_side_rois(
+        self,
+        face_bbox: tuple[int, int, int, int],
+        width: int,
+        height: int,
+    ) -> dict[str, tuple[float, float, float, float]]:
+        x1, y1, x2, y2 = face_bbox
+        face_w = max(1, x2 - x1)
+        face_h = max(1, y2 - y1)
+        expand_x = face_w * self.config.phone_to_ear_face_side_roi_expand
+        y_top = max(0.0, y1 + face_h * 0.10)
+        y_bottom = min(float(height - 1), y1 + face_h * 0.78)
+        return {
+            "left": (max(0.0, x1 - expand_x), y_top, min(float(width - 1), x1 + face_w * 0.18), y_bottom),
+            "right": (max(0.0, x2 - face_w * 0.18), y_top, min(float(width - 1), x2 + expand_x), y_bottom),
+        }
+
+    @staticmethod
+    def _point_in_roi(point: tuple[float, float], roi: tuple[float, float, float, float]) -> bool:
+        return roi[0] <= point[0] <= roi[2] and roi[1] <= point[1] <= roi[3]
 
     def _update_timer(self, attr: str, timestamp_ms: int, active: bool) -> None:
         if active and getattr(self, attr) is None:
