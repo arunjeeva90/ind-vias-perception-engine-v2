@@ -3,13 +3,35 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ind_vias_dms.core.types import AvailabilityState, DMSState, DistractionLevel, DrowsinessLevel
+from ind_vias_dms.core.occupant_manager import TrackedFace
+from ind_vias_dms.core.types import (
+    AttentionSubstate,
+    AvailabilityState,
+    DMSState,
+    DistractionLevel,
+    DrowsinessLevel,
+)
+from ind_vias_dms.vision.face_proposals import FaceProposal
 from ind_vias_dms.vision.face_landmarks import FaceLandmarkResult
 from ind_vias_dms.vision.head_pose import HeadPose
 from ind_vias_dms.visualization.colors import BLACK, GRAY, GREEN, RED, WHITE, status_color
 
 
 class OverlayRenderer:
+    def __init__(
+        self,
+        banner_min_hold_ms: int = 700,
+        normal_min_hold_ms: int = 300,
+        state_clear_confirm_ms: int = 800,
+    ) -> None:
+        self.banner_min_hold_ms = banner_min_hold_ms
+        self.normal_min_hold_ms = normal_min_hold_ms
+        self.state_clear_confirm_ms = state_clear_confirm_ms
+        self._banner_label = "NORMAL"
+        self._banner_status: object = AvailabilityState.AVAILABLE
+        self._banner_since_ms: int | None = None
+        self._normal_candidate_since_ms: int | None = None
+
     def draw(
         self,
         frame: np.ndarray,
@@ -40,9 +62,20 @@ class OverlayRenderer:
         max_gaze_vector_length_px: int = 100,
         draw_pose_axes: bool = True,
         draw_gaze_vector: bool = True,
+        faces: list[TrackedFace] | None = None,
+        draw_all_faces: bool = False,
+        show_track_id: bool = False,
+        face_proposals: list[FaceProposal] | None = None,
+        driver_roi_norm: tuple[float, float, float, float] | None = None,
     ) -> np.ndarray:
         out = frame.copy()
-        if face.bbox is not None:
+        if driver_roi_norm is not None:
+            self._draw_norm_roi(out, driver_roi_norm)
+        if face_proposals:
+            self._draw_face_proposals(out, face_proposals)
+        if draw_all_faces and faces:
+            self._draw_occupant_boxes(out, faces, state, show_track_id)
+        elif face.bbox is not None:
             cv2.rectangle(out, face.bbox[:2], face.bbox[2:], GREEN, 2)
         if face.landmarks_px:
             for idx, (x, y) in face.landmarks_px.items():
@@ -66,6 +99,12 @@ class OverlayRenderer:
         height: int = 720,
         road_yaw_offset_deg: float = 0.0,
         road_pitch_offset_deg: float = 0.0,
+        road_calibrated: bool = False,
+        vehicle_layout: str = "RHD",
+        driver_image_side: str = "LEFT",
+        camera_mount_position: str = "DASHBOARD_FRONT",
+        camera_view_direction: str = "CABIN_REARWARD",
+        driver_roi_state: str = "AUTO_LEFT",
     ) -> np.ndarray:
         canvas = np.zeros((height, width, 3), dtype=np.uint8)
         canvas[:] = (24, 24, 24)
@@ -79,39 +118,76 @@ class OverlayRenderer:
             BLACK,
             2,
         )
-        lines = [
-            ("FPS", f"{fps:.1f}"),
-            ("Presence", state.driver_presence.state.value),
-            ("Camera", state.dms_health.camera_status.value),
-            ("Gaze", state.gaze.zone.value),
-            ("Gaze confidence", f"{state.gaze.confidence:.2f}"),
-            (
-                "Yaw/Pitch/Roll",
-                f"{state.gaze.head_yaw_deg:.1f} / "
-                f"{state.gaze.head_pitch_deg:.1f} / {state.gaze.head_roll_deg:.1f}",
-            ),
-            ("Road offsets", f"{road_yaw_offset_deg:.1f} / {road_pitch_offset_deg:.1f}"),
-            ("Eyes", "CLOSED" if state.drowsiness.eye_closure_duration_ms else "OPEN"),
-            ("PERCLOS 5s/60s", f"{state.drowsiness.perclos_5s:.2f} / {state.drowsiness.perclos_60s:.2f}"),
-            ("Drowsiness", state.drowsiness.level.value),
-            ("Distraction", state.distraction.level.value),
-            ("Mobile", state.phone_use.state),
-            ("Availability", state.driver_availability.state.value),
-            ("Readiness", f"{state.driver_readiness_score.score_0_to_1:.2f}"),
-            ("Risk", state.driver_readiness_score.risk_level.value),
-            (
-                "Reason codes",
-                ", ".join(state.driver_availability.reason_codes)
-                if state.driver_availability.reason_codes
-                else "NONE",
-            ),
-        ]
-        y = 88
-        for label, value in lines:
-            cv2.putText(canvas, label, (24, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GRAY, 1)
-            cv2.putText(canvas, value, (190, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58, WHITE, 1)
-            y += 38
+        y = 70
+        for label, value in status_dashboard_lines(
+            state,
+            fps,
+            road_yaw_offset_deg,
+            road_pitch_offset_deg,
+            road_calibrated,
+            vehicle_layout,
+            driver_image_side,
+            camera_mount_position,
+            camera_view_direction,
+            driver_roi_state,
+        ):
+            cv2.putText(canvas, label, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.40, GRAY, 1)
+            cv2.putText(canvas, value[:36], (164, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, WHITE, 1)
+            y += 20
         return canvas
+
+    def _draw_occupant_boxes(
+        self,
+        frame: np.ndarray,
+        faces: list[TrackedFace],
+        state: DMSState,
+        show_track_id: bool,
+    ) -> None:
+        for tracked in faces:
+            box = tracked.observation.bbox
+            if box is None:
+                continue
+            if tracked.selected_as_driver:
+                color = GREEN
+            elif tracked.zone == "FRONT_PASSENGER":
+                color = (0, 220, 255)
+            else:
+                color = (255, 180, 40)
+            cv2.rectangle(frame, box[:2], box[2:], color, 2)
+            cv2.putText(
+                frame,
+                occupant_label(
+                    tracked.zone,
+                    tracked.track_id,
+                    tracked.selected_as_driver,
+                    state.driver_identity.driver_session_id,
+                    show_track_id,
+                ),
+                (box[0], max(20, box[1] - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+            )
+
+    def _draw_norm_roi(
+        self,
+        frame: np.ndarray,
+        roi: tuple[float, float, float, float],
+    ) -> None:
+        height, width = frame.shape[:2]
+        x1, y1 = int(roi[0] * width), int(roi[1] * height)
+        x2, y2 = int(roi[2] * width), int(roi[3] * height)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (80, 180, 255), 1)
+
+    def _draw_face_proposals(
+        self,
+        frame: np.ndarray,
+        proposals: list[FaceProposal],
+    ) -> None:
+        for proposal in proposals:
+            color = (255, 180, 40) if proposal.roi_name != "DRIVER_ROI" else (255, 120, 0)
+            cv2.rectangle(frame, proposal.bbox[:2], proposal.bbox[2:], color, 1)
 
     def _draw_head_axis(
         self,
@@ -139,10 +215,13 @@ class OverlayRenderer:
         if face.landmarks_px is None or 1 not in face.landmarks_px:
             return
         x, y = face.landmarks_px[1]
-        dx = int(state.gaze.head_yaw_deg * 2)
-        dy = int(state.gaze.head_pitch_deg * 2)
         origin = (int(x), int(y))
-        endpoint = clamp_endpoint(origin, (x + dx, y + dy), frame.shape, max_gaze_vector_length_px)
+        endpoint = clamp_endpoint(
+            origin,
+            (x + int(state.gaze.head_yaw_deg * 2), y + int(state.gaze.head_pitch_deg * 2)),
+            frame.shape,
+            max_gaze_vector_length_px,
+        )
         cv2.arrowedLine(frame, origin, endpoint, RED, 2)
 
     def _draw_panel(self, frame: np.ndarray, state: DMSState, fps: float) -> None:
@@ -150,11 +229,12 @@ class OverlayRenderer:
         cv2.rectangle(frame, (0, 0), (330, 310), GRAY, 1)
         lines = [
             f"FPS: {fps:.1f}",
-            f"Presence: {state.driver_presence.state.value}",
+            f"Driver: {state.driver_presence.state.value}",
             f"Gaze: {state.gaze.zone.value}",
             f"Yaw/Pitch/Roll: {state.gaze.head_yaw_deg:.1f}/{state.gaze.head_pitch_deg:.1f}/{state.gaze.head_roll_deg:.1f}",
-            f"Eyes: {'CLOSED' if state.drowsiness.eye_closure_duration_ms else 'OPEN'}",
+            f"Eyes: {state.drowsiness.eye_state}",
             f"PERCLOS: {state.drowsiness.perclos_5s:.2f}/{state.drowsiness.perclos_60s:.2f}",
+            f"Attention: {state.attention.attention_state.value}",
             f"Drowsiness: {state.drowsiness.level.value}",
             f"Distraction: {state.distraction.level.value}",
             f"Availability: {state.driver_availability.state.value}",
@@ -164,6 +244,58 @@ class OverlayRenderer:
             cv2.putText(frame, text, (12, 26 + i * 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, WHITE, 1)
 
     def _draw_banner(self, frame: np.ndarray, state: DMSState) -> None:
+        label, status = self._stable_banner(state)
+        color = status_color(status)
+        cv2.rectangle(frame, (0, 0), (frame.shape[1], 34), color, -1)
+        cv2.putText(frame, label, (20, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.75, BLACK, 2)
+
+    def _stable_banner(self, state: DMSState) -> tuple[str, object]:
+        label, status = banner_decision(state)
+        now_ms = state.timestamp_ms
+        if self._banner_since_ms is None:
+            self._banner_since_ms = now_ms
+            self._banner_label = label
+            self._banner_status = status
+            return label, status
+        elapsed_ms = now_ms - self._banner_since_ms
+        if label == self._banner_label:
+            if label != "NORMAL":
+                self._normal_candidate_since_ms = None
+            return self._banner_label, self._banner_status
+        if label == "NORMAL":
+            if self._normal_candidate_since_ms is None:
+                self._normal_candidate_since_ms = now_ms
+            if (
+                now_ms - self._normal_candidate_since_ms < self.state_clear_confirm_ms
+                or elapsed_ms < self.banner_min_hold_ms
+            ):
+                return self._banner_label, self._banner_status
+        elif self._banner_label == "NORMAL" and elapsed_ms < self.normal_min_hold_ms:
+            return self._banner_label, self._banner_status
+        self._banner_label = label
+        self._banner_status = status
+        self._banner_since_ms = now_ms
+        self._normal_candidate_since_ms = None
+        return label, status
+
+
+def banner_decision(state: DMSState) -> tuple[str, object]:
+        if state.dms_v02.final_banner and state.dms_v02.final_decision_path:
+            banner = state.dms_v02.final_banner
+            if banner == "NORMAL":
+                return banner, AvailabilityState.AVAILABLE
+            if banner == "DMS MONITOR":
+                return banner, DistractionLevel.LOW
+            if banner == "DMS DEGRADED":
+                return banner, AvailabilityState.DEGRADED
+            if banner == "DISTRACTION WARNING":
+                return banner, DistractionLevel.MEDIUM
+            if banner == "DROWSINESS WARNING":
+                return banner, DrowsinessLevel.MEDIUM
+            if banner == "DANGER":
+                return banner, DrowsinessLevel.HIGH
+            if banner == "DRIVER UNAVAILABLE":
+                return banner, AvailabilityState.UNAVAILABLE
         label = "NORMAL"
         status = AvailabilityState.AVAILABLE
         if state.driver_availability.state == AvailabilityState.UNAVAILABLE:
@@ -178,12 +310,177 @@ class OverlayRenderer:
         elif state.distraction.level in {DistractionLevel.HIGH, DistractionLevel.MEDIUM}:
             label = "DISTRACTION WARNING"
             status = state.distraction.level
+        elif state.attention.attention_substate in {
+            AttentionSubstate.VISUAL_DISTRACTION,
+            AttentionSubstate.HEAD_DOWN_DISTRACTION,
+            AttentionSubstate.PHONE_SUSPECTED,
+            AttentionSubstate.PHONE_DOWN_SUSPECTED,
+            AttentionSubstate.PHONE_TO_EAR_SUSPECTED,
+            AttentionSubstate.TEXTING_SUSPECTED,
+        }:
+            label = "DISTRACTION WARNING"
+            status = DistractionLevel.MEDIUM
         elif state.driver_availability.state == AvailabilityState.DEGRADED:
             label = "DMS DEGRADED"
             status = AvailabilityState.DEGRADED
-        color = status_color(status)
-        cv2.rectangle(frame, (0, 0), (frame.shape[1], 34), color, -1)
-        cv2.putText(frame, label, (20, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.75, BLACK, 2)
+        return label, status
+
+
+def status_dashboard_lines(
+    state: DMSState,
+    fps: float,
+    road_yaw_offset_deg: float = 0.0,
+    road_pitch_offset_deg: float = 0.0,
+    road_calibrated: bool = False,
+    vehicle_layout: str = "RHD",
+    driver_image_side: str = "LEFT",
+    camera_mount_position: str = "DASHBOARD_FRONT",
+    camera_view_direction: str = "CABIN_REARWARD",
+    driver_roi_state: str = "AUTO_LEFT",
+) -> list[tuple[str, str]]:
+    return [
+        ("FPS", f"{fps:.1f}"),
+        ("Camera health", state.dms_health.camera_status.value),
+        ("Face detection", state.dms_health.face_detection_status.value),
+        ("Face backend", state.dms_health.face_backend),
+        ("NIR mode", state.dms_health.nir_mode),
+        ("Input mode", state.dms_health.input_color_mode),
+        ("Threshold profile", state.dms_health.active_eye_threshold_profile),
+        ("NIR active", "YES" if state.dms_health.nir_preprocessing_active else "NO"),
+        ("NIR reason", ",".join(state.dms_health.nir_reason_codes) or "NONE"),
+        ("Face proposals", str(state.dms_health.face_proposals)),
+        ("Face det conf", f"{state.dms_health.face_detection_confidence:.2f}"),
+        ("Driver face", state.driver_presence.state.value),
+        ("Observability", state.driver_observability.state.value),
+        ("Obs reason", ",".join(state.driver_observability.reason_codes) or "NONE"),
+        ("Raw eyes", state.drowsiness.raw_eye_state),
+        ("Effective eyes", state.drowsiness.effective_eye_state),
+        ("Eye raw/norm", f"{state.drowsiness.eye_openness_raw:.2f}/{state.drowsiness.eye_openness_normalized:.2f}"),
+        ("Eye calib", state.drowsiness.eye_calibration_state),
+        ("Eye visibility", f"{state.drowsiness.eye_visibility_score:.2f}"),
+        ("Closure ms", str(state.drowsiness.eye_closure_duration_ms)),
+        ("PERCLOS usable", "YES" if state.drowsiness.perclos_valid else "NO"),
+        (
+            "PERCLOS reason",
+            ",".join(state.drowsiness.perclos_validity_reason_codes) or "VALID",
+        ),
+        ("PERCLOS 5s/60s", f"{state.drowsiness.perclos_5s:.2f} / {state.drowsiness.perclos_60s:.2f}"),
+        ("PERCLOS valid", f"{state.drowsiness.perclos_valid_time_5s_ms}/{state.drowsiness.perclos_valid_time_60s_ms}"),
+        ("Drowsiness", state.drowsiness.level.value),
+        ("Distraction", state.distraction.level.value),
+        ("v0.2 level", state.dms_v02.final_level.value),
+        ("v0.2 banner", state.dms_v02.final_banner),
+        ("Drowsy head", state.dms_v02.drowsiness_state),
+        ("Distract head", state.dms_v02.distraction_state),
+        ("Avail head", state.dms_v02.driver_availability_state),
+        ("Conf head", state.dms_v02.dms_confidence_state.value),
+        ("Phone state", state.phone_use.driver_state),
+        ("Phone reason", ",".join(state.phone_use.reason_codes) or "NONE"),
+        ("Attention", state.attention.attention_state.value),
+        ("Substate", state.attention.attention_substate.value),
+        ("Attn conf", f"{state.attention.attention_confidence:.2f}"),
+        ("Attn reason", ",".join(state.attention.attention_reason_codes) or "NONE"),
+        ("Head-down ms", str(state.attention.head_down_duration_ms)),
+        ("Head-down uncertain", str(state.attention.head_down_uncertain_duration_ms)),
+        ("Gaze-offroad ms", str(state.attention.gaze_offroad_duration_ms)),
+        ("Phone-down ms", str(state.attention.phone_down_candidate_duration_ms)),
+        ("Pose reliable", "YES" if state.attention.pose_reliable else "NO"),
+        ("Attn source", state.attention.effective_attention_source),
+        ("Final path", state.attention.final_decision_path or "NONE"),
+        ("v0.2 path", state.dms_v02.final_decision_path or "NONE"),
+        ("Availability", state.driver_availability.state.value),
+        (
+            "Reason codes",
+            ", ".join(state.driver_availability.reason_codes)
+            if state.driver_availability.reason_codes
+            else "NONE",
+        ),
+        ("Driver session", str(state.driver_identity.driver_session_id)),
+        ("Driver track", f"T{state.driver_identity.driver_track_id}" if state.driver_identity.driver_track_id is not None else "None"),
+        ("Session state", state.driver_identity.session_state),
+        ("Reassociated", "YES" if state.driver_identity.reassociated else "NO"),
+        ("Time since seen", str(state.driver_identity.time_since_seen_ms)),
+        ("Driver body", state.driver_identity.driver_body_state),
+        ("Driver seat zone", state.driver_identity.driver_slot_assignment),
+        ("Driver slot conf", f"{state.driver_identity.driver_candidate_score:.2f}"),
+        ("Driver front score", f"{state.driver_identity.driver_front_layer_score:.2f}"),
+        ("Driver depth", state.driver_identity.candidate_depth_layer),
+        ("Driver slot reason", state.driver_identity.driver_slot_reason or "NONE"),
+        ("Driver validation", state.driver_identity.driver_validation_state),
+        ("Proposal conf", f"{state.driver_identity.driver_proposal_confidence:.2f}"),
+        (
+            "Face quality",
+            f"comp={state.driver_identity.driver_face_completeness_score:.2f} "
+            f"cov={state.driver_identity.driver_landmark_coverage_score:.2f}",
+        ),
+        ("Landmarks", str(state.driver_identity.driver_landmark_count)),
+        ("Partial face", "YES" if state.driver_identity.driver_partial_face else "NO"),
+        (
+            "Face reject",
+            ",".join(state.driver_identity.driver_validation_reasons) or "NONE",
+        ),
+        (
+            "Occupants",
+            f"faces={state.occupants.face_count} proposals={state.occupants.proposal_count} "
+            f"pending={state.occupants.unconfirmed_proposal_count} body={state.occupants.driver_body_present}",
+        ),
+        ("Occupancy", str(state.occupancy.cabin_occupant_count)),
+        ("Driver seat", state.occupancy.seats.get("driver", None).occupied if state.occupancy.seats.get("driver") else "unknown"),
+        (
+            "Front passenger",
+            state.occupancy.seats.get("front_passenger", None).occupied
+            if state.occupancy.seats.get("front_passenger")
+            else "unknown",
+        ),
+        (
+            "Rear L/C/R",
+            f"{state.occupancy.rear_left_present}/{state.occupancy.rear_center_present}/{state.occupancy.rear_right_present}",
+        ),
+        ("Occ conf", f"{state.occupancy.occupancy_confidence:.2f}"),
+        ("Occ reason", ",".join(state.occupancy.occupancy_reason_codes) or "NONE"),
+        ("Gaze", state.gaze.zone.value),
+        ("Gaze confidence", f"{state.gaze.confidence:.2f}"),
+        (
+            "Yaw/Pitch/Roll",
+            f"{state.gaze.head_yaw_deg:.1f} / "
+            f"{state.gaze.head_pitch_deg:.1f} / {state.gaze.head_roll_deg:.1f}",
+        ),
+        (
+            "Head angle",
+            "raw yaw/pitch/roll = "
+            f"{state.gaze.head_pose_raw_yaw_deg:.1f}/{state.gaze.head_pose_raw_pitch_deg:.1f}/"
+            f"{state.gaze.head_pose_raw_roll_deg:.1f} deg | road-relative yaw/pitch/roll = "
+            f"{state.gaze.relative_yaw_deg:.1f}/{state.gaze.relative_pitch_deg:.1f}/"
+            f"{state.gaze.relative_roll_deg:.1f} deg | road-vector angle = "
+            f"{state.gaze.head_angle_from_road_deg:.1f} deg",
+        ),
+        ("Head vector quality", f"{state.gaze.head_pose_vector_quality:.2f}"),
+        ("Side glance", f"{state.attention.side_glance_state} {state.attention.side_glance_duration_ms}ms"),
+        ("Road offsets", f"{road_yaw_offset_deg:.1f} / {road_pitch_offset_deg:.1f}"),
+        ("Road calib", "CALIBRATED" if road_calibrated else "NOT_CALIBRATED"),
+        ("Road source", getattr(state.gaze, "calibration_source", "DEFAULT")),
+        ("Vehicle layout", vehicle_layout),
+        ("Driver image side", driver_image_side),
+        ("Camera mount", camera_mount_position),
+        ("View direction", camera_view_direction),
+        ("Driver ROI", driver_roi_state),
+        ("Cabin mobile", ", ".join(state.phone_use.cabin_events) or "NONE"),
+        ("Readiness", f"{state.driver_readiness_score.score_0_to_1:.2f}"),
+        ("Risk", state.driver_readiness_score.risk_level.value),
+    ]
+
+
+def occupant_label(
+    zone: str,
+    track_id: int,
+    selected_as_driver: bool = False,
+    driver_session_id: str | None = None,
+    show_track_id: bool = False,
+) -> str:
+    if selected_as_driver and driver_session_id:
+        return f"DRIVER {driver_session_id} / T{track_id}" if show_track_id else f"DRIVER {driver_session_id}"
+    label_zone = "DRIVER" if selected_as_driver else zone
+    return f"{label_zone} T{track_id}"
 
 
 def clamp_endpoint(

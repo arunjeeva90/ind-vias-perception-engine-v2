@@ -21,16 +21,22 @@ class DistractionFSM:
             self.level = DistractionLevel.UNKNOWN
             self.type = DistractionType.UNKNOWN
             return self.level, self.type
-        if phone_state == "TEXTING_SUSPECTED":
+        if phone_state == "PHONE_CONFIRMED":
+            self.level = DistractionLevel.HIGH
+            self.type = DistractionType.PHONE_CONFIRMED
+        elif phone_state == "TEXTING_SUSPECTED":
             self.level = DistractionLevel.HIGH
             self.type = DistractionType.PHONE_SUSPECTED
-        elif phone_state == "PHONE_TO_EAR_SUSPECTED":
-            self.level = (
-                DistractionLevel.HIGH
-                if eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms
-                else DistractionLevel.MEDIUM
-            )
-            self.type = DistractionType.PHONE_SUSPECTED
+        elif phone_state in {"PHONE_TO_EAR_SUSPECTED", "PHONE_SUSPECTED"}:
+            if self.config.phone_to_ear_fast_escalation:
+                self.level = DistractionLevel.MEDIUM if phone_state == "PHONE_SUSPECTED" else DistractionLevel.HIGH
+            else:
+                self.level = (
+                    DistractionLevel.HIGH
+                    if eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms
+                    else DistractionLevel.MEDIUM
+                )
+            self.type = DistractionType.PHONE_SUSPECTED if phone_state == "PHONE_SUSPECTED" else DistractionType.PHONE_TO_EAR
         elif phone_state == "PHONE_DOWN_SUSPECTED":
             self.level = DistractionLevel.MEDIUM
             self.type = DistractionType.PHONE_SUSPECTED
@@ -39,17 +45,21 @@ class DistractionFSM:
             self.type = DistractionType.PHONE_SUSPECTED
         elif (
             gaze_zone in {GazeZone.DOWN, GazeZone.PHONE_DOWN}
-            and eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms
+            and eyes_off_road_duration_ms >= self.config.gaze_away_high_ms
         ):
             self.level = DistractionLevel.HIGH
             self.type = DistractionType.PHONE_SUSPECTED
-        elif eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms * 2:
+        elif eyes_off_road_duration_ms >= self.config.gaze_away_high_ms:
             self.level = DistractionLevel.HIGH
             self.type = DistractionType.VISUAL
-        elif eyes_off_road_duration_ms >= self.config.eyes_off_road_warning_ms:
+        elif eyes_off_road_duration_ms >= self.config.gaze_away_medium_ms:
             self.level = DistractionLevel.MEDIUM
             self.type = DistractionType.VISUAL
-        elif gaze_zone != GazeZone.ROAD and gaze_zone != GazeZone.UNKNOWN:
+        elif (
+            gaze_zone != GazeZone.ROAD
+            and gaze_zone != GazeZone.UNKNOWN
+            and eyes_off_road_duration_ms >= self.config.gaze_away_low_ms
+        ):
             self.level = DistractionLevel.LOW
             self.type = DistractionType.VISUAL
         else:
