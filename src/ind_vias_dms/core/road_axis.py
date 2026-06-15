@@ -141,6 +141,10 @@ class RoadAxisHeadPoseReference:
                     self._recovery_since_ms = timestamp_ms
                 recovery_ms = max(0, timestamp_ms - self._recovery_since_ms)
                 side_state = "SIDE_PROFILE_RECOVERY" if recovery_ms < self.config.side_glance_recovery_ms else "ROAD_AXIS_NORMAL"
+                if recovery_ms >= self.config.side_glance_recovery_ms:
+                    self._last_side_glance_ms = None
+                    self._last_side_glance_state = "ROAD_AXIS_NORMAL"
+                    self._side_glance_since_ms = None
             elif not held_side_context:
                 recovery_ms = 0
                 self._recovery_since_ms = None

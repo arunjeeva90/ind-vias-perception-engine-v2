@@ -2173,6 +2173,142 @@ def test_v023_learning_memory_writes_review_event(tmp_path):
     assert record["event_type"] == "SIDE_PROFILE_FALSE_DEGRADED"
 
 
+def test_v024_raw_face_proposal_hidden_in_normal_overlay_by_default():
+    from ind_vias_dms.vision.face_proposals import FaceProposal
+
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    proposal = FaceProposal((60, 60, 95, 95), 0.9, "test", "REAR_ROI")
+    rendered = OverlayRenderer().draw_video_overlay(
+        frame,
+        DMSState(),
+        FaceLandmarkResult(False),
+        HeadPose(),
+        fps=30.0,
+        draw_panel=False,
+        face_proposals=[proposal],
+    )
+
+    assert np.count_nonzero(rendered[60:96, 60:96]) == 0
+
+
+def test_v024_raw_face_proposal_debug_mode_draws_faint_not_validated_box():
+    from ind_vias_dms.vision.face_proposals import FaceProposal
+
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    proposal = FaceProposal((60, 60, 95, 95), 0.9, "test", "REAR_ROI")
+    rendered = OverlayRenderer().draw_video_overlay(
+        frame,
+        DMSState(),
+        FaceLandmarkResult(False),
+        HeadPose(),
+        fps=30.0,
+        draw_panel=False,
+        face_proposals=[proposal],
+        show_debug_proposal_boxes=True,
+    )
+
+    assert np.count_nonzero(rendered[60:96, 60:96]) > 0
+
+
+def test_v024_road_facing_dropout_hold_maps_to_monitor_not_degraded():
+    attention = DMSState().attention
+    attention.attention_state = AttentionState.NORMAL
+    attention.attention_substate = AttentionSubstate.ROAD_FACING_TRACK_HELD
+    attention.attention_reason_codes = [
+        "ROAD_FACING_TRACK_HELD",
+        "FACE_MESH_DROPOUT_HELD",
+        "DEGRADED_SUPPRESSED_ROAD_FACING_TRACK_HELD",
+    ]
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    health = DMSHealth(camera_status=CameraStatus.OK, face_detection_status=CameraStatus.NO_FACE)
+    health.eye_visibility_score = 0.0
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(
+            health=health,
+            availability=availability,
+            attention=attention,
+            driver_present=False,
+            driver_body_present=True,
+            no_face_duration_ms=500,
+            driver_observability=DriverObservabilityState.UNOBSERVABLE_TEMP.value,
+        )
+    )
+
+    assert decision.final_banner == "DMS MONITOR"
+    assert decision.driver_availability_state == "PARTIALLY_AVAILABLE"
+    assert "DEGRADED_SUPPRESSED_ROAD_FACING_TRACK_HELD" in decision.reason_codes
+
+
+def test_v024_road_facing_dropout_hold_expired_can_degrade():
+    attention = DMSState().attention
+    attention.attention_state = AttentionState.DEGRADED
+    attention.attention_substate = AttentionSubstate.FACE_LOST
+    attention.attention_reason_codes = ["ROAD_FACING_HOLD_EXPIRED", "DRIVER_OBSERVABILITY_TEMP_LOST"]
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    health = DMSHealth(camera_status=CameraStatus.OK, face_detection_status=CameraStatus.NO_FACE)
+    health.eye_visibility_score = 0.0
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(
+            health=health,
+            availability=availability,
+            attention=attention,
+            driver_present=False,
+            driver_body_present=True,
+            no_face_duration_ms=1400,
+            driver_observability=DriverObservabilityState.UNOBSERVABLE_TEMP.value,
+        )
+    )
+
+    assert decision.final_banner == "DMS DEGRADED"
+
+
+def test_v024_stale_side_profile_reasons_clear_after_recovery():
+    attention = DMSState().attention
+    attention.attention_state = AttentionState.NORMAL
+    attention.attention_substate = AttentionSubstate.ROAD
+    attention.side_glance_state = "ROAD_AXIS_NORMAL"
+    attention.side_glance_recovery_ms = 1200
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.AVAILABLE
+    availability.reason_codes = ["SIDE_PROFILE_FACE_LOST", "DRIVER_UNOBSERVABLE_SIDE_PROFILE"]
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(attention=attention, availability=availability)
+    )
+
+    assert "SIDE_PROFILE_FACE_LOST" not in decision.reason_codes
+    assert "DRIVER_UNOBSERVABLE_SIDE_PROFILE" not in decision.reason_codes
+    assert "SIDE_PROFILE_RECOVERED_TO_ROAD_AXIS" in decision.reason_codes
+
+
+def test_v024_debug_record_flags_normal_while_attention_degraded():
+    state = DMSState()
+    state.dms_v02.final_banner = "NORMAL"
+    state.attention.attention_state = AttentionState.DEGRADED
+    state.attention.attention_substate = AttentionSubstate.FACE_LOST
+
+    record = build_debug_record(state, {"face": FaceLandmarkResult(False)}, np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert "NORMAL_WHILE_ATTENTION_DEGRADED" in record["contradiction_flags"]
+
+
+def test_v024_learning_memory_records_new_failure_types(tmp_path):
+    path = tmp_path / "events.jsonl"
+    writer = LearningMemoryWriter(str(path), DMSConfig())
+    state = DMSState(frame_id=3, timestamp_ms=100)
+    state.dms_v02.final_banner = "DMS MONITOR"
+    state.attention.attention_substate = AttentionSubstate.ROAD_FACING_TRACK_HELD
+    writer.write_frame(state, {}, np.zeros((20, 20, 3), dtype=np.uint8))
+    writer.close()
+
+    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert record["event_type"] == "ROAD_FACING_FACE_MESH_DROPOUT"
+
+
 def test_v02_temp_unobservable_without_body_still_waits_before_unavailable():
     availability = DMSState().driver_availability
     availability.state = AvailabilityState.DEGRADED
@@ -2351,3 +2487,92 @@ def test_glasses_low_eye_confidence_degrades_not_unavailable():
 
     assert availability.state == AvailabilityState.DEGRADED
     assert "GLASSES_REFLECTION_LOW_EYE_CONFIDENCE" in availability.reason_codes
+
+
+def test_v025_driver_zone_proposal_suppresses_unavailable():
+    pipeline = DMSPipeline.__new__(DMSPipeline)
+    pipeline.config = DMSConfig()
+    pipeline.road_calibration_source = "DEFAULT"
+    pipeline.face_backend = type("Backend", (), {"last_face_mesh_failure_reason": "FACE_MESH_FAILED_ALL_RETRIES"})()
+
+    availability = pipeline._availability(
+        FaceLandmarkResult(False),
+        EyeState(is_closed=False, confidence=0.0),
+        DrowsinessLevel.UNKNOWN,
+        DistractionLevel.UNKNOWN,
+        no_face_duration_ms=5000,
+        eye_closure_duration_ms=0,
+        eyes_off_road_duration_ms=0,
+        gaze_zone=GazeZone.UNKNOWN,
+        occupant_count=0,
+        driver_body_state="UNKNOWN",
+        driver_observability=DriverObservabilityState.PARTIALLY_OBSERVABLE.value,
+        driver_proposal_visible=True,
+        driver_proposal_reason_codes=["DRIVER_ZONE_PROPOSAL_PRESENT"],
+        driver_proposal_visible_ms=3000,
+    )
+
+    assert availability.state == AvailabilityState.DEGRADED
+    assert "DRIVER_UNAVAILABLE_SUPPRESSED_PROPOSAL_PRESENT" in availability.reason_codes
+    assert "FACE_PROPOSAL_LANDMARK_FAILED" in availability.reason_codes
+
+
+def test_v025_driver_proposal_visible_presence_state():
+    pipeline = DMSPipeline.__new__(DMSPipeline)
+    pipeline.config = DMSConfig()
+    pipeline.occupants = type("Occupants", (), {"driver_last_seen_ms": None})()
+
+    state = pipeline._presence_state(
+        face_found=False,
+        occupant_count=0,
+        no_face_duration_ms=5000,
+        session_state="UNKNOWN",
+        driver_proposal_visible=True,
+    )
+
+    assert state == PresenceState.PROPOSAL_VISIBLE
+
+
+def test_v025_driver_identity_serializes_proposal_only_fields():
+    state = DMSState()
+    state.driver_identity.face_proposal_state = "DRIVER_ZONE_PROPOSAL_PRESENT"
+    state.driver_identity.driver_face_state = "LANDMARK_FAILED"
+    state.driver_identity.driver_proposal_visible = True
+    state.driver_identity.driver_proposal_bbox_norm = [0.1, 0.2, 0.3, 0.4]
+    state.driver_identity.face_mesh_attempt_count = 4
+    payload = state.to_dict()
+
+    identity = payload["driver_identity"]
+    assert identity["face_proposal_state"] == "DRIVER_ZONE_PROPOSAL_PRESENT"
+    assert identity["driver_face_state"] == "LANDMARK_FAILED"
+    assert identity["driver_proposal_visible"] is True
+    assert identity["face_mesh_attempt_count"] == 4
+
+
+def test_v025_invalid_zero_runtime_calibration_is_rejected():
+    pipeline = DMSPipeline.__new__(DMSPipeline)
+    pipeline.config = DMSConfig()
+    pipeline.gaze_estimator = GazeEstimator(pipeline.config)
+    pipeline.road_axis = RoadAxisHeadPoseReference(DMSConfig())
+    pipeline.road_calibration_source = "DEFAULT"
+    pipeline.last_road_calibration_status = "NOT_REQUESTED"
+    pipeline.last_road_calibration_reason = ""
+
+    pipeline.calibrate_road_gaze(0.0, 0.0, 0.0, source="RUNTIME", confidence=0.9)
+
+    assert pipeline.last_road_calibration_status == "REJECTED"
+    assert pipeline.last_road_calibration_reason == "ROAD_CALIBRATION_ZERO_REFERENCE_BLOCKED"
+    assert pipeline.road_calibration_source == "DEFAULT"
+
+
+def test_v025_debug_trace_flags_unavailable_with_visible_proposal():
+    state = DMSState()
+    state.driver_availability.state = AvailabilityState.UNAVAILABLE
+    state.driver_identity.driver_proposal_visible = True
+    state.driver_identity.driver_face_state = "LANDMARK_FAILED"
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+
+    record = build_debug_record(state, {"face": FaceLandmarkResult(False)}, frame)
+
+    assert "DRIVER_UNAVAILABLE_WITH_PROPOSAL" in record["contradiction_flags"]
+    assert "PROPOSAL_ONLY_DRIVER_FRAME" in record["contradiction_flags"]

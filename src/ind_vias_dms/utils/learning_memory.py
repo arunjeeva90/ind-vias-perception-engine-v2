@@ -65,6 +65,12 @@ class LearningMemoryWriter:
             "keyframe": keyframe,
             "driver_crop": "",
             "phone_crop": "",
+            "proposal_metrics": {
+                "proposal_only_driver": state.driver_identity.driver_proposal_visible,
+                "face_mesh_attempt_count": state.driver_identity.face_mesh_attempt_count,
+                "face_mesh_success_attempt": state.driver_identity.face_mesh_success_attempt,
+                "face_mesh_failure_reason": state.driver_identity.face_mesh_failure_reason,
+            },
             "review_outputs_supported": [
                 "false_positive_library",
                 "false_negative_library",
@@ -84,11 +90,19 @@ class LearningMemoryWriter:
 
     @staticmethod
     def _should_record(state: DMSState) -> bool:
+        reasons = set(
+            state.dms_v02.classification_reason_codes
+            + state.dms_v02.reason_codes
+            + state.attention.attention_reason_codes
+            + state.phone_use.reason_codes
+        )
         return (
             state.dms_v02.final_banner != "NORMAL"
             or state.phone_use.driver_state not in {"NO_PHONE", "UNKNOWN"}
             or state.attention.attention_substate.value
-            in {"FACE_LOST", "SIDE_PROFILE_TRACKED", "SIDE_PROFILE_ATTENTION_LOSS"}
+            in {"FACE_LOST", "SIDE_PROFILE_TRACKED", "SIDE_PROFILE_ATTENTION_LOSS", "ROAD_FACING_TRACK_HELD"}
+            or bool({"NORMAL_WHILE_ATTENTION_DEGRADED", "RAW_REAR_SHELF_FALSE_PROPOSAL"} & reasons)
+            or state.driver_identity.driver_proposal_visible
         )
 
     @staticmethod
@@ -99,8 +113,18 @@ class LearningMemoryWriter:
             + state.attention.attention_reason_codes
             + state.phone_use.reason_codes
         )
+        if "RAW_REAR_SHELF_FALSE_PROPOSAL" in reasons or "REAR_SHELF_FALSE_POSITIVE_REJECTED" in reasons:
+            return "RAW_REAR_SHELF_FALSE_PROPOSAL"
+        if "FACE_PROPOSAL_OVERLAY_FALSE_POSITIVE" in reasons:
+            return "FACE_PROPOSAL_OVERLAY_FALSE_POSITIVE"
+        if state.attention.attention_substate.value == "ROAD_FACING_TRACK_HELD":
+            return "ROAD_FACING_FACE_MESH_DROPOUT"
+        if "STALE_SIDE_PROFILE_CONTEXT_CLEARED" in reasons or "SIDE_PROFILE_REASON_SUPPRESSED_AFTER_RECOVERY" in reasons:
+            return "STALE_SIDE_PROFILE_CONTEXT"
         if state.dms_v02.final_banner == "DMS DEGRADED" and state.attention.attention_substate.value.startswith("SIDE"):
             return "SIDE_PROFILE_FALSE_DEGRADED"
+        if state.dms_v02.final_banner == "DMS DEGRADED" and abs(state.gaze.relative_yaw_deg) <= 30.0:
+            return "DEGRADED_WHILE_ROAD_FACING_PROBABLE"
         if state.dms_v02.final_banner == "DMS DEGRADED" and state.attention.yaw_classifiable:
             return "DEGRADED_WHILE_CLASSIFIABLE"
         if state.dms_v02.final_banner == "NORMAL" and (
@@ -120,6 +144,16 @@ class LearningMemoryWriter:
             return "OCCUPANT_FALSE_POSITIVE"
         if "ROAD_AXIS_CALIBRATION_UPDATE" in reasons:
             return "ROAD_AXIS_CALIBRATION_UPDATE"
+        if (
+            state.driver_availability.state.value == "UNAVAILABLE"
+            and state.driver_identity.driver_proposal_visible
+        ):
+            return "DRIVER_UNAVAILABLE_WITH_PROPOSAL"
+        if (
+            state.driver_identity.driver_proposal_visible
+            and state.driver_identity.driver_face_state in {"PROPOSAL_ONLY", "LANDMARK_FAILED"}
+        ):
+            return "FACE_PROPOSAL_LANDMARK_FAILED"
         return state.dms_v02.final_banner.replace(" ", "_")
 
     def _threshold_snapshot(self) -> dict[str, Any]:

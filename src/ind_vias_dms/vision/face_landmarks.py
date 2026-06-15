@@ -64,6 +64,12 @@ class FaceLandmarkBackend:
         self.last_proposals: list[FaceProposal] = []
         self.last_backend_used = "FaceMesh direct"
         self.last_nir_mode = "BGR"
+        self.last_face_mesh_attempt_count = 0
+        self.last_face_mesh_success_attempt = "NONE"
+        self.last_face_mesh_failure_reason = "NONE"
+        self.last_crop_margin_used = 0.0
+        self.last_crop_upscale_used = 1.0
+        self.last_crop_bbox_norm: tuple[float, float, float, float] | None = None
         if backend != "mediapipe":
             raise ValueError(f"Unsupported DMS face backend: {backend}")
         try:
@@ -85,6 +91,12 @@ class FaceLandmarkBackend:
         return faces[0] if faces else FaceLandmarkResult(face_found=False)
 
     def process_all(self, frame_bgr: np.ndarray) -> list[FaceLandmarkResult]:
+        self.last_face_mesh_attempt_count = 0
+        self.last_face_mesh_success_attempt = "NONE"
+        self.last_face_mesh_failure_reason = "NONE"
+        self.last_crop_margin_used = 0.0
+        self.last_crop_upscale_used = 1.0
+        self.last_crop_bbox_norm = None
         preprocessed = preprocess_for_face_detection(frame_bgr, self.config)
         detection_frame = preprocessed.frame_bgr
         self.last_nir_mode = preprocessed.mode
@@ -96,7 +108,16 @@ class FaceLandmarkBackend:
                 if faces:
                     self.last_backend_used = "FaceDetection crop"
                     return faces
+                if self.config.face_mesh_full_frame_fallback:
+                    fallback_faces = self._process_full_frame(detection_frame)
+                    self.last_face_mesh_attempt_count += 1
+                    if fallback_faces:
+                        self.last_backend_used = "FaceMesh full-frame fallback"
+                        self.last_face_mesh_success_attempt = "FULL_FRAME_FALLBACK"
+                        return fallback_faces
                 self.last_backend_used = "FaceDetection proposal"
+                if self.last_face_mesh_failure_reason == "NONE":
+                    self.last_face_mesh_failure_reason = "FACE_MESH_FAILED_ALL_RETRIES"
                 return [
                     self._proposal_only_result(proposal, frame_bgr.shape)
                     for proposal in self.last_proposals
@@ -137,40 +158,86 @@ class FaceLandmarkBackend:
         for proposal in proposals:
             if not self._proposal_area_ok(proposal, original_shape):
                 continue
-            x1, y1, x2, y2 = expand_box(
-                proposal.bbox,
-                detection_frame.shape,
-                self.config.face_crop_margin,
-            )
-            if min(x2 - x1, y2 - y1) < self.config.face_crop_min_size_px:
-                continue
-            crop = detection_frame[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
-            scale = max(1.0, self.config.face_crop_upscale)
-            crop_for_mesh = cv2.resize(
-                crop,
-                None,
-                fx=scale,
-                fy=scale,
-                interpolation=cv2.INTER_CUBIC,
-            )
-            rgb = cv2.cvtColor(crop_for_mesh, cv2.COLOR_BGR2RGB)
-            result = self._face_mesh.process(rgb)
-            if not result.multi_face_landmarks:
-                continue
-            face = result.multi_face_landmarks[0]
-            faces.append(
-                self._landmark_result(
-                    face.landmark,
-                    original_shape,
-                    (crop_for_mesh.shape[1], crop_for_mesh.shape[0]),
-                    (x1, y1),
-                    scale,
-                    max(0.65, proposal.confidence),
-                )
-            )
+            margins = list(self.config.face_mesh_retry_crop_margins) if self.config.face_mesh_retry_enabled else [self.config.face_crop_margin]
+            upscales = list(self.config.face_mesh_retry_upscale_factors) if self.config.face_mesh_retry_enabled else [self.config.face_crop_upscale]
+            if self.config.face_crop_margin not in margins:
+                margins.insert(0, self.config.face_crop_margin)
+            if self.config.face_crop_upscale not in upscales:
+                upscales.insert(0, self.config.face_crop_upscale)
+            for margin in margins:
+                x1, y1, x2, y2 = expand_box(proposal.bbox, detection_frame.shape, float(margin))
+                if self.config.face_mesh_retry_square_crop:
+                    x1, y1, x2, y2 = self._square_box((x1, y1, x2, y2), detection_frame.shape)
+                if min(x2 - x1, y2 - y1) < self.config.face_crop_min_size_px:
+                    self.last_face_mesh_failure_reason = "FACE_CROP_TOO_SMALL"
+                    continue
+                crop = detection_frame[y1:y2, x1:x2]
+                if crop.size == 0:
+                    self.last_face_mesh_failure_reason = "EMPTY_FACE_CROP"
+                    continue
+                if self.config.face_mesh_retry_clahe:
+                    crop = self._enhance_crop(crop)
+                for scale_value in upscales:
+                    scale = max(1.0, float(scale_value))
+                    self.last_face_mesh_attempt_count += 1
+                    crop_for_mesh = cv2.resize(
+                        crop,
+                        None,
+                        fx=scale,
+                        fy=scale,
+                        interpolation=cv2.INTER_CUBIC,
+                    )
+                    rgb = cv2.cvtColor(crop_for_mesh, cv2.COLOR_BGR2RGB)
+                    result = self._face_mesh.process(rgb)
+                    if not result.multi_face_landmarks:
+                        self.last_face_mesh_failure_reason = "FACE_MESH_FAILED_ALL_RETRIES"
+                        continue
+                    face = result.multi_face_landmarks[0]
+                    height, width = original_shape[:2]
+                    self.last_face_mesh_success_attempt = "FACE_MESH_CROP_RETRY"
+                    self.last_crop_margin_used = float(margin)
+                    self.last_crop_upscale_used = scale
+                    self.last_crop_bbox_norm = (x1 / width, y1 / height, x2 / width, y2 / height)
+                    faces.append(
+                        self._landmark_result(
+                            face.landmark,
+                            original_shape,
+                            (crop_for_mesh.shape[1], crop_for_mesh.shape[0]),
+                            (x1, y1),
+                            scale,
+                            max(0.65, proposal.confidence),
+                        )
+                    )
+                    break
+                if faces:
+                    break
         return faces
+
+    @staticmethod
+    def _square_box(
+        box: tuple[int, int, int, int],
+        frame_shape: tuple[int, int, int],
+    ) -> tuple[int, int, int, int]:
+        height, width = frame_shape[:2]
+        x1, y1, x2, y2 = box
+        size = max(x2 - x1, y2 - y1)
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        half = size // 2
+        return (
+            max(0, cx - half),
+            max(0, cy - half),
+            min(width - 1, cx + half),
+            min(height - 1, cy + half),
+        )
+
+    @staticmethod
+    def _enhance_crop(crop_bgr: np.ndarray) -> np.ndarray:
+        lab = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2LAB)
+        l_chan, a_chan, b_chan = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(l_chan)
+        return cv2.cvtColor(cv2.merge((enhanced, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
 
     def _landmark_result(
         self,

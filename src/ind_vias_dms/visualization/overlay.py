@@ -66,13 +66,17 @@ class OverlayRenderer:
         draw_all_faces: bool = False,
         show_track_id: bool = False,
         face_proposals: list[FaceProposal] | None = None,
+        driver_proposal_candidate: dict[str, object] | None = None,
         driver_roi_norm: tuple[float, float, float, float] | None = None,
+        show_debug_proposal_boxes: bool = False,
     ) -> np.ndarray:
         out = frame.copy()
         if driver_roi_norm is not None:
             self._draw_norm_roi(out, driver_roi_norm)
-        if face_proposals:
+        if face_proposals and show_debug_proposal_boxes:
             self._draw_face_proposals(out, face_proposals)
+        if driver_proposal_candidate and driver_proposal_candidate.get("visible") and not face.landmarks_px:
+            self._draw_driver_candidate(out, driver_proposal_candidate)
         if draw_all_faces and faces:
             self._draw_occupant_boxes(out, faces, state, show_track_id)
         elif face.bbox is not None:
@@ -147,22 +151,41 @@ class OverlayRenderer:
             box = tracked.observation.bbox
             if box is None:
                 continue
-            if tracked.selected_as_driver:
+            proposal_only_driver = tracked.selected_as_driver and not tracked.observation.landmarks_px
+            if proposal_only_driver:
+                color = (255, 220, 80)
+                label = "DRIVER CANDIDATE T{} - LANDMARK FAILED".format(tracked.track_id)
+            elif tracked.selected_as_driver:
                 color = GREEN
-            elif tracked.zone == "FRONT_PASSENGER":
-                color = (0, 220, 255)
-            else:
-                color = (255, 180, 40)
-            cv2.rectangle(frame, box[:2], box[2:], color, 2)
-            cv2.putText(
-                frame,
-                occupant_label(
+                label = occupant_label(
                     tracked.zone,
                     tracked.track_id,
                     tracked.selected_as_driver,
                     state.driver_identity.driver_session_id,
                     show_track_id,
-                ),
+                )
+            elif tracked.zone == "FRONT_PASSENGER":
+                color = (0, 220, 255)
+                label = occupant_label(
+                    tracked.zone,
+                    tracked.track_id,
+                    tracked.selected_as_driver,
+                    state.driver_identity.driver_session_id,
+                    show_track_id,
+                )
+            else:
+                color = (255, 180, 40)
+                label = occupant_label(
+                    tracked.zone,
+                    tracked.track_id,
+                    tracked.selected_as_driver,
+                    state.driver_identity.driver_session_id,
+                    show_track_id,
+                )
+            cv2.rectangle(frame, box[:2], box[2:], color, 2)
+            cv2.putText(
+                frame,
+                label,
                 (box[0], max(20, box[1] - 8)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
@@ -186,8 +209,40 @@ class OverlayRenderer:
         proposals: list[FaceProposal],
     ) -> None:
         for proposal in proposals:
-            color = (255, 180, 40) if proposal.roi_name != "DRIVER_ROI" else (255, 120, 0)
+            color = (180, 160, 120)
             cv2.rectangle(frame, proposal.bbox[:2], proposal.bbox[2:], color, 1)
+            cv2.putText(
+                frame,
+                "RAW PROPOSAL / NOT VALIDATED",
+                (proposal.bbox[0], max(18, proposal.bbox[1] - 4)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                color,
+                1,
+            )
+
+    def _draw_driver_candidate(self, frame: np.ndarray, candidate: dict[str, object]) -> None:
+        box = candidate.get("bbox_norm") or []
+        if not isinstance(box, list) or len(box) != 4:
+            return
+        height, width = frame.shape[:2]
+        x1, y1, x2, y2 = (
+            int(float(box[0]) * width),
+            int(float(box[1]) * height),
+            int(float(box[2]) * width),
+            int(float(box[3]) * height),
+        )
+        color = (255, 220, 80)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(
+            frame,
+            "DRIVER CANDIDATE - LANDMARK FAILED",
+            (x1, max(24, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            color,
+            2,
+        )
 
     def _draw_head_axis(
         self,
@@ -351,6 +406,10 @@ def status_dashboard_lines(
         ("Face proposals", str(state.dms_health.face_proposals)),
         ("Face det conf", f"{state.dms_health.face_detection_confidence:.2f}"),
         ("Driver face", state.driver_presence.state.value),
+        ("Driver face state", state.driver_identity.driver_face_state),
+        ("Proposal state", state.driver_identity.face_proposal_state),
+        ("Mesh attempts", str(state.driver_identity.face_mesh_attempt_count)),
+        ("Mesh result", state.driver_identity.face_mesh_success_attempt or state.driver_identity.face_mesh_failure_reason),
         ("Observability", state.driver_observability.state.value),
         ("Obs reason", ",".join(state.driver_observability.reason_codes) or "NONE"),
         ("Raw eyes", state.drowsiness.raw_eye_state),
@@ -456,6 +515,9 @@ def status_dashboard_lines(
         ),
         ("Head vector quality", f"{state.gaze.head_pose_vector_quality:.2f}"),
         ("Side glance", f"{state.attention.side_glance_state} {state.attention.side_glance_duration_ms}ms"),
+        ("Driver hold", state.attention.attention_substate.value if state.attention.attention_substate == AttentionSubstate.ROAD_FACING_TRACK_HELD else "NONE"),
+        ("Road axis source", state.gaze.road_axis_calibration_source),
+        ("Road axis conf", f"{state.gaze.road_axis_calibration_confidence:.2f}"),
         ("Road offsets", f"{road_yaw_offset_deg:.1f} / {road_pitch_offset_deg:.1f}"),
         ("Road calib", "CALIBRATED" if road_calibrated else "NOT_CALIBRATED"),
         ("Road source", getattr(state.gaze, "calibration_source", "DEFAULT")),

@@ -157,8 +157,24 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         & set(state.attention.attention_reason_codes + state.phone_use.reason_codes)
     ):
         contradiction_flags.append("NORMAL_WITH_ACTIVE_DISTRACTION_EVIDENCE")
+    if (
+        state.dms_v02.final_banner == "NORMAL"
+        and state.attention.attention_state.value == "DEGRADED"
+        and state.attention.attention_substate.value != "ROAD_FACING_TRACK_HELD"
+    ):
+        contradiction_flags.append("NORMAL_WHILE_ATTENTION_DEGRADED")
     if any(reason in state.drowsiness.perclos_validity_reason_codes for reason in state.phone_use.reason_codes):
         contradiction_flags.append("PERCLOS_REASON_CONTAINS_PHONE_REASON")
+    if (
+        state.driver_availability.state.value == "UNAVAILABLE"
+        and state.driver_identity.driver_proposal_visible
+    ):
+        contradiction_flags.append("DRIVER_UNAVAILABLE_WITH_PROPOSAL")
+    if (
+        state.driver_identity.driver_proposal_visible
+        and state.driver_identity.driver_face_state in {"PROPOSAL_ONLY", "LANDMARK_FAILED"}
+    ):
+        contradiction_flags.append("PROPOSAL_ONLY_DRIVER_FRAME")
 
     classification_reason_codes = list(
         state.dms_v02.classification_reason_codes or state.dms_v02.reason_codes

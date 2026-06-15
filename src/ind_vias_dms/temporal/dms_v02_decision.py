@@ -119,6 +119,8 @@ class DMSV02DecisionMatrix:
     def _confidence(self, inputs: DMSV02Inputs) -> DMSConfidenceState:
         if inputs.health.camera_status.value == "ERROR":
             return DMSConfidenceState.UNAVAILABLE
+        if inputs.attention.attention_substate == AttentionSubstate.ROAD_FACING_TRACK_HELD:
+            return DMSConfidenceState.MEDIUM
         if not inputs.driver_present and inputs.no_face_duration_ms >= self.config.no_face_degraded_ms:
             return DMSConfidenceState.LOW
         if inputs.health.eye_visibility_score < self.config.eye_visibility_min_confidence:
@@ -200,6 +202,7 @@ class DMSV02DecisionMatrix:
             AttentionSubstate.SIDE_GLANCE_RIGHT,
             AttentionSubstate.SIDE_PROFILE_TRACKED,
             AttentionSubstate.SIDE_PROFILE_RECOVERY,
+            AttentionSubstate.ROAD_FACING_TRACK_HELD,
         }:
             return "MONITOR"
         if inputs.distraction_level == DistractionLevel.UNKNOWN:
@@ -221,6 +224,8 @@ class DMSV02DecisionMatrix:
             return "UNAVAILABLE"
         if drowsiness_state == "MICROSLEEP":
             return "UNAVAILABLE"
+        if inputs.attention.attention_substate == AttentionSubstate.ROAD_FACING_TRACK_HELD:
+            return "PARTIALLY_AVAILABLE"
         if inputs.availability.state == AvailabilityState.DEGRADED:
             return "DEGRADED"
         if inputs.attention.attention_state.value in {"DEGRADED", "ATTENTION_LOST"}:
@@ -317,6 +322,23 @@ class DMSV02DecisionMatrix:
             cleaned.append("LOW_HEAD_MOTION_DROWSINESS_SUPPORT_ONLY")
         if "RECOVERY_HOLD" in path:
             cleaned.extend(["DEGRADED_RECOVERY_HOLD", "OBSERVATION_RECOVERY_WAIT"])
+        if inputs.attention.attention_substate in {
+            AttentionSubstate.ROAD_FACING_TRACK_HELD,
+            AttentionSubstate.SIDE_PROFILE_RECOVERY,
+            AttentionSubstate.ROAD,
+        }:
+            stale_side_reasons = {
+                "SIDE_PROFILE_FACE_LOST",
+                "DRIVER_UNOBSERVABLE_SIDE_PROFILE",
+                "RAW_SIDE_PROFILE",
+            }
+            cleaned = [reason for reason in cleaned if reason not in stale_side_reasons]
+            if inputs.attention.side_glance_recovery_ms >= self.config.side_glance_recovery_ms:
+                cleaned.extend([
+                    "STALE_SIDE_PROFILE_CONTEXT_CLEARED",
+                    "SIDE_PROFILE_RECOVERED_TO_ROAD_AXIS",
+                    "SIDE_PROFILE_REASON_SUPPRESSED_AFTER_RECOVERY",
+                ])
         if banner == "NORMAL":
             cleaned = [reason for reason in cleaned if reason not in classification_attention_loss]
             cleaned.append("ROAD_GAZE_CONFIRMED")
@@ -344,6 +366,7 @@ class DMSV02DecisionMatrix:
                 AttentionSubstate.SIDE_GLANCE_RIGHT,
                 AttentionSubstate.SIDE_PROFILE_TRACKED,
                 AttentionSubstate.SIDE_PROFILE_RECOVERY,
+                AttentionSubstate.ROAD_FACING_TRACK_HELD,
             }
             or inputs.attention.phone_down_candidate_duration_ms >= self.config.phone_down_monitor_ms
             or inputs.attention.phone_texting_candidate_duration_ms >= self.config.phone_down_monitor_ms
@@ -472,22 +495,23 @@ class DMSV02DecisionMatrix:
         )
 
     def _normal_blocked(self, inputs: DMSV02Inputs) -> bool:
-        return (
-            inputs.attention.attention_state.value == "DEGRADED"
-            or inputs.attention.attention_substate
-            in {
-                AttentionSubstate.FACE_LOST,
-                AttentionSubstate.AMBIGUOUS,
-                AttentionSubstate.HEAD_POSE_UNRELIABLE,
-            }
-            and not self._side_profile_attention_available(inputs)
-            or inputs.attention.head_down_duration_ms > self.config.head_down_candidate_ms
+        if inputs.attention.attention_substate == AttentionSubstate.ROAD_FACING_TRACK_HELD:
+            return False
+        degraded_attention = inputs.attention.attention_state.value == "DEGRADED"
+        blocked_substate = inputs.attention.attention_substate in {
+            AttentionSubstate.FACE_LOST,
+            AttentionSubstate.AMBIGUOUS,
+            AttentionSubstate.HEAD_POSE_UNRELIABLE,
+        }
+        active_behavior = (
+            inputs.attention.head_down_duration_ms > self.config.head_down_candidate_ms
             or inputs.attention.phone_down_candidate_duration_ms > self.config.phone_down_monitor_ms
             or inputs.attention.phone_texting_candidate_duration_ms > self.config.phone_down_monitor_ms
             or inputs.attention.gaze_offroad_duration_ms > self.config.gaze_away_low_ms
-            or inputs.driver_observability == "UNOBSERVABLE_TEMP"
-            and not self._side_profile_attention_available(inputs)
         )
+        unobservable = inputs.driver_observability == "UNOBSERVABLE_TEMP"
+        side_context = self._side_profile_attention_available(inputs)
+        return degraded_attention or active_behavior or ((blocked_substate or unobservable) and not side_context)
 
     def _side_profile_attention_available(self, inputs: DMSV02Inputs) -> bool:
         return (
@@ -500,6 +524,7 @@ class DMSV02DecisionMatrix:
                 AttentionSubstate.SIDE_PROFILE_TRACKED,
                 AttentionSubstate.SIDE_PROFILE_ATTENTION_LOSS,
                 AttentionSubstate.SIDE_PROFILE_RECOVERY,
+                AttentionSubstate.ROAD_FACING_TRACK_HELD,
             }
         )
 

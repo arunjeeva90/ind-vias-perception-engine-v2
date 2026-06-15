@@ -23,6 +23,20 @@ face_mesh_on_crops: true
 face_crop_margin: 0.25
 face_crop_min_size_px: 80
 face_crop_upscale: 2.0
+face_mesh_retry_enabled: true
+face_mesh_retry_crop_margins: [0.25, 0.40, 0.60]
+face_mesh_retry_square_crop: true
+face_mesh_retry_upscale_factors: [1.5, 2.0]
+face_mesh_retry_clahe: true
+face_mesh_full_frame_fallback: true
+face_mesh_min_landmarks_for_driver: 120
+face_mesh_accept_partial_landmarks_for_tracking: true
+driver_proposal_visible_suppresses_unavailable: true
+driver_proposal_visible_max_degraded_ms: 5000
+driver_proposal_visible_after_timeout_banner: DMS_DEGRADED
+driver_unavailable_requires_no_proposal_ms: 3000
+road_calibration_min_pose_confidence: 0.30
+road_calibration_min_vector_quality: 0.30
 frame_resize_width: 960
 output_fps: 30
 perclos_short_window_s: 5
@@ -89,6 +103,22 @@ side_glance_monitor_ms: 300
 side_glance_warning_ms: 1000
 side_glance_danger_ms: 4000
 side_glance_recovery_ms: 1000
+show_raw_face_proposals: false
+show_rejected_face_proposals: false
+show_debug_proposal_boxes: false
+rear_shelf_false_positive_filter_enabled: true
+rear_shelf_zone_y_min_norm: 0.30
+rear_shelf_zone_y_max_norm: 0.58
+rear_shelf_min_face_completeness: 0.45
+rear_shelf_require_landmark_validation: true
+suppress_unvalidated_rear_shelf_proposals: true
+proposal_temporal_confirm_ms: 500
+road_facing_face_mesh_dropout_hold_ms: 1200
+road_facing_hold_requires_recent_valid_track_ms: 1500
+road_facing_hold_max_abs_relative_yaw_deg: 30
+road_facing_hold_max_abs_relative_pitch_deg: 20
+road_facing_hold_requires_driver_zone: true
+road_facing_hold_requires_proposal_or_body: true
 high_distraction_unavailable_ms: 5000
 visual_distraction_unavailable_ms: 10000
 attention_lost_unavailable_ms: 10000

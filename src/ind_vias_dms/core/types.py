@@ -21,6 +21,7 @@ class PresenceState(StableStrEnum):
     PRESENT = "PRESENT"
     ABSENT = "ABSENT"
     NOT_VISIBLE = "NOT_VISIBLE"
+    PROPOSAL_VISIBLE = "PROPOSAL_VISIBLE"
     LOST_TEMP = "LOST_TEMP"
     LOST_LONG = "LOST_LONG"
     LOST = "LOST"
@@ -126,6 +127,7 @@ class AttentionSubstate(StableStrEnum):
     SIDE_PROFILE_TRACKED = "SIDE_PROFILE_TRACKED"
     SIDE_PROFILE_ATTENTION_LOSS = "SIDE_PROFILE_ATTENTION_LOSS"
     SIDE_PROFILE_RECOVERY = "SIDE_PROFILE_RECOVERY"
+    ROAD_FACING_TRACK_HELD = "ROAD_FACING_TRACK_HELD"
     VISUAL_AWAY = "VISUAL_AWAY"
     DROWSY = "DROWSY"
     MICROSLEEP = "MICROSLEEP"
@@ -387,6 +389,17 @@ class DriverIdentityState:
     driver_landmark_coverage_score: float = 0.0
     driver_landmark_count: int = 0
     driver_partial_face: bool = False
+    face_proposal_state: str = "NO_PROPOSAL"
+    driver_face_state: str = "NOT_VISIBLE"
+    driver_proposal_visible: bool = False
+    driver_proposal_bbox_norm: list[float] = field(default_factory=list)
+    driver_track_hold_state: str = "NONE"
+    face_mesh_attempt_count: int = 0
+    face_mesh_success_attempt: str = "NONE"
+    face_mesh_failure_reason: str = "NONE"
+    crop_margin_used: float = 0.0
+    crop_upscale_used: float = 1.0
+    crop_bbox_norm: list[float] = field(default_factory=list)
 
 
 @dataclass

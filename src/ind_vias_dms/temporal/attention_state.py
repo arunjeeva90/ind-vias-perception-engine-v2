@@ -190,6 +190,26 @@ class AttentionStateClassifier:
             and signals.side_profile_context_active
             and signals.driver_body_present
         )
+        road_facing_track_held = (
+            not signals.driver_face_present
+            and signals.driver_body_present
+            and signals.session_state == "LOST_TEMP"
+            and signals.side_glance_state in {"ROAD_AXIS_NORMAL", "SIDE_PROFILE_RECOVERY"}
+            and signals.side_glance_recovery_ms > 0
+            and abs(signals.relative_yaw_deg) <= self.config.road_facing_hold_max_abs_relative_yaw_deg
+            and abs(signals.relative_pitch_deg) <= self.config.road_facing_hold_max_abs_relative_pitch_deg
+            and signals.side_glance_recovery_ms < self.config.road_facing_face_mesh_dropout_hold_ms
+        )
+        road_facing_hold_expired = (
+            not signals.driver_face_present
+            and signals.driver_body_present
+            and signals.session_state == "LOST_TEMP"
+            and signals.side_glance_state in {"ROAD_AXIS_NORMAL", "SIDE_PROFILE_RECOVERY"}
+            and signals.side_glance_recovery_ms > 0
+            and abs(signals.relative_yaw_deg) <= self.config.road_facing_hold_max_abs_relative_yaw_deg
+            and abs(signals.relative_pitch_deg) <= self.config.road_facing_hold_max_abs_relative_pitch_deg
+            and signals.side_glance_recovery_ms >= self.config.road_facing_face_mesh_dropout_hold_ms
+        )
         side_glance_monitor = (
             signals.yaw_classifiable
             and signals.side_glance_duration_ms >= self.config.side_glance_monitor_ms
@@ -229,6 +249,21 @@ class AttentionStateClassifier:
             reasons.extend(["RELATIVE_YAW_SIDE_GLANCE", "SIDE_GLANCE_MONITOR"])
         if side_glance_warning:
             reasons.extend(["RELATIVE_YAW_SIDE_GLANCE_SUSTAINED", "SIDE_GLANCE_DISTRACTION_WARNING"])
+        if road_facing_track_held:
+            reasons.extend([
+                "ROAD_FACING_TRACK_HELD",
+                "FACE_MESH_DROPOUT_HELD",
+                "DEGRADED_SUPPRESSED_ROAD_FACING_TRACK_HELD",
+                "DRIVER_TRACK_HELD_WITHOUT_FRESH_LANDMARKS",
+                "PERCLOS_PAUSED_TRACK_HELD",
+                "NORMAL_ALLOWED_ROAD_FACING_TRACK_HELD",
+            ])
+        if signals.side_glance_state == "ROAD_AXIS_NORMAL" and signals.side_glance_recovery_ms >= self.config.side_glance_recovery_ms:
+            reasons.extend([
+                "STALE_SIDE_PROFILE_CONTEXT_CLEARED",
+                "SIDE_PROFILE_RECOVERED_TO_ROAD_AXIS",
+                "SIDE_PROFILE_REASON_SUPPRESSED_AFTER_RECOVERY",
+            ])
 
         microsleep_candidate = (
             eye_valid
@@ -295,7 +330,22 @@ class AttentionStateClassifier:
         effective_source = "UNKNOWN"
         final_path = "NORMAL > ROAD"
 
-        if side_profile_lost and side_profile_attention_available:
+        if road_facing_track_held:
+            state = AttentionState.NORMAL
+            substate = AttentionSubstate.ROAD_FACING_TRACK_HELD
+            confidence = 0.55
+            availability_reason = "ROAD_FACING_TRACK_HELD"
+            effective_source = "APPEARANCE"
+            final_path = f"NORMAL_HELD > ROAD_FACING_TRACK_HELD > recovery_ms={signals.side_glance_recovery_ms}"
+        elif road_facing_hold_expired:
+            state = AttentionState.DEGRADED
+            substate = AttentionSubstate.FACE_LOST
+            confidence = 0.35
+            availability_reason = "ROAD_FACING_HOLD_EXPIRED"
+            effective_source = "APPEARANCE"
+            reasons.extend(["ROAD_FACING_HOLD_EXPIRED", "DRIVER_OBSERVABILITY_TEMP_LOST"])
+            final_path = "DMS_DEGRADED > ROAD_FACING_HOLD_EXPIRED"
+        elif side_profile_lost and side_profile_attention_available:
             state = AttentionState.ATTENTION_LOST if signals.side_glance_duration_ms >= self.config.side_glance_warning_ms else AttentionState.DEGRADED
             substate = (
                 AttentionSubstate.SIDE_PROFILE_ATTENTION_LOSS
