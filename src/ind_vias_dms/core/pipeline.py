@@ -51,7 +51,7 @@ from ind_vias_dms.temporal.perclos import PERCLOSTracker
 from ind_vias_dms.vision.eye_state import EyeState, EyeStateEstimator
 from ind_vias_dms.vision.face_landmarks import FaceLandmarkBackend, FaceLandmarkResult
 from ind_vias_dms.vision.gaze import GazeEstimate, GazeEstimator
-from ind_vias_dms.vision.head_pose import HeadPoseEstimator
+from ind_vias_dms.vision.head_pose import HeadPose, HeadPoseEstimator
 from ind_vias_dms.vision.phone_detection import MobileDistractionEstimator
 from ind_vias_dms.vision.seatbelt import SeatbeltDetectionPlaceholder
 
@@ -95,6 +95,10 @@ class DMSPipeline:
         self.road_calibration_source = "DEFAULT"
         self.valid_eye_observation_since_ms: int | None = None
         self.driver_proposal_visible_since_ms: int | None = None
+        self._last_stable_head_pose: HeadPose | None = None
+        self._last_stable_pose_ms: int | None = None
+        self._pose_hold_until_ms: int | None = None
+        self._pose_hold_reason_codes: list[str] = []
 
     def process(
         self,
@@ -143,14 +147,43 @@ class DMSPipeline:
             self._reset_driver_temporal()
         raw_head_pose = self.head_pose_estimator.estimate(face.landmarks_px, frame.shape)
         head_pose = self.head_pose_smoother.update(raw_head_pose) if face.face_found else raw_head_pose
+        eye_state = self.eye_state_estimator.estimate(face.landmarks_px)
         pose_unreliable = face.face_found and self._pose_unreliable(head_pose)
+        pose_held = False
+        pose_hold_codes: list[str] = []
+        if self._should_hold_previous_pose(face, eye_state, head_pose, timestamp_ms):
+            head_pose = self._last_stable_head_pose or head_pose
+            pose_unreliable = False
+            pose_held = True
+            self._pose_hold_until_ms = timestamp_ms + self.config.pose_jump_hold_ms
+            pose_hold_codes = [
+                "HEAD_POSE_UNREALISTIC_JUMP",
+                "HEAD_POSE_HELD_PREVIOUS_STABLE",
+                "HEAD_POSE_DEGRADED_SUPPRESSED_VALID_FACE",
+                "POSE_JUMP_FILTER_ACTIVE",
+                "POSE_VISUAL_CONTRADICTION_VALID_FACE",
+            ]
+        elif self._pose_hold_until_ms is not None and timestamp_ms <= self._pose_hold_until_ms:
+            if self._last_stable_head_pose is not None and self._valid_face_for_pose_hold(face, eye_state):
+                head_pose = self._last_stable_head_pose
+                pose_unreliable = False
+                pose_held = True
+                pose_hold_codes = ["HEAD_POSE_HELD_PREVIOUS_STABLE", "POSE_JUMP_FILTER_ACTIVE"]
+        else:
+            self._pose_hold_until_ms = None
+            if pose_unreliable:
+                pose_hold_codes = ["POSE_HOLD_EXPIRED"] if self._last_stable_head_pose is not None else []
+
         if (
             face.face_found
             and not pose_unreliable
             and head_pose.confidence >= self.config.head_pose_min_confidence
         ):
             self.last_driver_abs_yaw_deg = abs(head_pose.yaw_deg)
-        eye_state = self.eye_state_estimator.estimate(face.landmarks_px)
+            if not pose_held:
+                self._last_stable_head_pose = head_pose
+                self._last_stable_pose_ms = timestamp_ms
+        self._pose_hold_reason_codes = pose_hold_codes
         eye_temporal = self.eye_temporal.update(
             timestamp_ms,
             eye_state.openness,
@@ -332,6 +365,15 @@ class DMSPipeline:
                 side_profile_context_active=road_axis_pose.side_profile_context_active,
             )
         )
+        if pose_hold_codes:
+            attention.attention_reason_codes = list(
+                dict.fromkeys(attention.attention_reason_codes + pose_hold_codes)
+            )
+            attention.final_decision_path = (
+                "DMS_MONITOR > HEAD_POSE_HELD_PREVIOUS_STABLE"
+                if attention.final_decision_path.startswith("DMS_DEGRADED")
+                else attention.final_decision_path
+            )
         if (
             phone_use.driver_state in {"NO_PHONE", "UNKNOWN"}
             and attention.phone_suspicion_candidate
@@ -852,6 +894,51 @@ class DMSPipeline:
             or abs(getattr(head_pose, "roll_deg", 0.0)) > self.config.max_valid_roll_deg
         )
 
+    def _should_hold_previous_pose(
+        self,
+        face: FaceLandmarkResult,
+        eye_state: EyeState,
+        head_pose: HeadPose,
+        timestamp_ms: int,
+    ) -> bool:
+        if not self.config.pose_plausibility_filter_enabled:
+            return False
+        if self._last_stable_head_pose is None or self._last_stable_pose_ms is None:
+            return False
+        if not self._valid_face_for_pose_hold(face, eye_state):
+            return False
+        dt_ms = max(1, timestamp_ms - self._last_stable_pose_ms)
+        scale = max(1.0, dt_ms / 100.0)
+        yaw_jump = abs(head_pose.yaw_deg - self._last_stable_head_pose.yaw_deg)
+        pitch_jump = abs(head_pose.pitch_deg - self._last_stable_head_pose.pitch_deg)
+        roll_jump = abs(head_pose.roll_deg - self._last_stable_head_pose.roll_deg)
+        jump_unrealistic = (
+            yaw_jump > self.config.max_yaw_jump_deg_per_100ms * scale
+            or pitch_jump > self.config.max_pitch_jump_deg_per_100ms * scale
+            or roll_jump > self.config.max_roll_jump_deg_per_100ms * scale
+        )
+        out_of_range = (
+            abs(head_pose.pitch_deg) > self.config.max_plausible_pitch_deg
+            or abs(head_pose.roll_deg) > self.config.max_plausible_roll_deg
+            or head_pose.confidence < 0.4
+        )
+        return jump_unrealistic or out_of_range
+
+    def _valid_face_for_pose_hold(self, face: FaceLandmarkResult, eye_state: EyeState) -> bool:
+        if self.config.pose_hold_requires_valid_face and not face.face_found:
+            return False
+        if face.confidence < self.config.pose_hold_requires_face_confidence_min:
+            return False
+        if eye_state.confidence < self.config.pose_hold_requires_eye_visibility_min:
+            return False
+        quality = face.quality
+        if quality is None:
+            return bool(face.landmarks_px)
+        return (
+            quality.landmark_coverage_score >= self.config.pose_hold_requires_landmark_coverage_min
+            and quality.landmark_count >= self.config.driver_min_landmark_count
+        )
+
     @staticmethod
     def _perclos_pause_reason(driver_session_held: bool, eye_valid_for_perclos: bool) -> str | None:
         if driver_session_held:
@@ -937,10 +1024,50 @@ class DMSPipeline:
         }:
             reasons.append(raw_phone_state)
             return raw_phone_state, list(dict.fromkeys(reasons))
+        if raw_phone_state in {
+            "SELF_TOUCH_TRANSIENT",
+            "EAR_SCRATCH_GESTURE",
+            "FACE_TOUCH_GROOMING",
+        }:
+            extra = [raw_phone_state]
+            if raw_phone_state == "SELF_TOUCH_TRANSIENT":
+                extra.extend([
+                    "HAND_NEAR_EAR_RAW",
+                    "SELF_TOUCH_TRANSIENT",
+                    "PHONE_TO_EAR_SUPPRESSED_SELF_TOUCH",
+                ])
+            elif raw_phone_state == "EAR_SCRATCH_GESTURE":
+                extra.extend([
+                    "HAND_NEAR_EAR_RAW",
+                    "EAR_SCRATCH_GESTURE",
+                    "PHONE_TO_EAR_SUPPRESSED_SELF_TOUCH",
+                    "PHONE_TO_EAR_SUPPRESSED_NO_PHONE_OBJECT",
+                ])
+            else:
+                extra.extend(["FACE_TOUCH_GROOMING", "PHONE_TO_EAR_SUPPRESSED_SELF_TOUCH"])
+            if gaze_zone == GazeZone.ROAD:
+                extra.append("PHONE_TO_EAR_SUPPRESSED_ROAD_GAZE")
+            return "NO_PHONE", list(dict.fromkeys(reasons + extra))
+        if raw_phone_state == "PHONE_TO_EAR_CANDIDATE":
+            extra = [
+                "HAND_NEAR_EAR_RAW",
+                "PHONE_TO_EAR_CANDIDATE",
+                "PHONE_TO_EAR_SUPPRESSED_NO_PHONE_OBJECT",
+            ]
+            if gaze_zone == GazeZone.ROAD:
+                extra.append("PHONE_TO_EAR_SUPPRESSED_ROAD_GAZE")
+            return "PHONE_TO_EAR_CANDIDATE", list(dict.fromkeys(reasons + extra))
         if raw_phone_state == "PHONE_CONFIRMED":
             return "PHONE_CONFIRMED", list(dict.fromkeys(reasons + ["PHONE_CONFIRMED"]))
         if raw_phone_state == "HAND_NEAR_FACE":
-            return "PHONE_SUSPECTED", list(dict.fromkeys(reasons + ["HAND_NEAR_FACE"]))
+            extra = [
+                "HAND_NEAR_FACE",
+                "FACE_TOUCH_GROOMING",
+                "PHONE_TO_EAR_SUPPRESSED_SELF_TOUCH",
+            ]
+            if gaze_zone == GazeZone.ROAD:
+                extra.append("PHONE_TO_EAR_SUPPRESSED_ROAD_GAZE")
+            return "NO_PHONE", list(dict.fromkeys(reasons + extra))
         downward_phone_posture = (
             gaze_zone in DOWNWARD_GAZE_ZONES
             or head_pitch_deg >= self.config.head_pitch_down_threshold_deg

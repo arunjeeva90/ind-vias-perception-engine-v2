@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="configs/dms/dualsight_dms_v0_1.yaml")
     parser.add_argument("--debug-overlay", action="store_true")
     parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument("--start-ms", type=int, default=None)
+    parser.add_argument("--end-ms", type=int, default=None)
     parser.add_argument("--display", action="store_true")
     parser.add_argument("--status-window", action="store_true")
     parser.add_argument("--show-track-id", action="store_true")
@@ -100,14 +102,23 @@ def main() -> None:
     )
     writer = None
     frame_id = 0
+    processed_frames = 0
+    if args.start_ms is not None:
+        if args.video is not None:
+            cap.set(cv2.CAP_PROP_POS_MSEC, max(0, args.start_ms))
+            frame_id = int((max(0, args.start_ms) / 1000.0) * fps)
+        else:
+            raise SystemExit("--start-ms/--end-ms are supported for --video sources only")
 
     try:
-        while args.max_frames is None or frame_id < args.max_frames:
+        while args.max_frames is None or processed_frames < args.max_frames:
             ok, frame = cap.read()
             if not ok:
                 break
             frame = resize_to_width(frame, config.frame_resize_width)
             timestamp_ms = int((frame_id / fps) * 1000)
+            if args.end_ms is not None and timestamp_ms > args.end_ms:
+                break
             state, context = pipeline.process(frame, timestamp_ms, frame_id)
             state.gaze.calibration_source = road_calibration_source
             jsonl.write(serialize_dms_state(state))
@@ -196,6 +207,7 @@ def main() -> None:
                     road_calibration_source = "DEFAULT"
                     print(f"Road gaze calibrated: yaw_offset={yaw:.2f}, pitch_offset={pitch:.2f}")
             frame_id += 1
+            processed_frames += 1
     finally:
         cap.release()
         if writer is not None:

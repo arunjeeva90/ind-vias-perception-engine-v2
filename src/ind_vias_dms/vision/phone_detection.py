@@ -16,7 +16,12 @@ from ind_vias_dms.vision.face_landmarks import FaceLandmarkResult
 
 class MobileDistractionState(str, Enum):
     NO_MOBILE_DISTRACTION = "NO_PHONE"
+    SELF_TOUCH_TRANSIENT = "SELF_TOUCH_TRANSIENT"
+    EAR_SCRATCH_GESTURE = "EAR_SCRATCH_GESTURE"
+    FACE_TOUCH_GROOMING = "FACE_TOUCH_GROOMING"
+    PHONE_TO_EAR_CANDIDATE = "PHONE_TO_EAR_CANDIDATE"
     PHONE_TO_EAR_SUSPECTED = "PHONE_TO_EAR_SUSPECTED"
+    PHONE_TO_EAR_CONFIRMED = "PHONE_TO_EAR_CONFIRMED"
     PHONE_DOWN_SUSPECTED = "PHONE_DOWN_SUSPECTED"
     TEXTING_SUSPECTED = "TEXTING_SUSPECTED"
     HAND_NEAR_FACE = "HAND_NEAR_FACE"
@@ -48,6 +53,8 @@ class MobileDistractionEstimator:
         self.down_since_ms: int | None = None
         self.phone_to_ear_since_ms: int | None = None
         self.texting_since_ms: int | None = None
+        self._last_ear_hand_center: tuple[float, float] | None = None
+        self._last_ear_motion_px: float = 0.0
         self._hands: Any | None = None
         self.last_phone_object = PhoneObjectResult()
         self._phone_object_cfg = config.phone_object_detection or {}
@@ -100,14 +107,37 @@ class MobileDistractionEstimator:
     ) -> PlaceholderState:
         if self._elapsed(self.texting_since_ms, timestamp_ms) >= self.config.texting_sustain_ms:
             return PlaceholderState(MobileDistractionState.TEXTING_SUSPECTED.value, 0.8)
+        phone_to_ear_ms = self._elapsed(self.phone_to_ear_since_ms, timestamp_ms)
+        if hand.near_ear and phone_to_ear_ms < self.config.hand_to_ear_transient_ms:
+            return PlaceholderState(MobileDistractionState.SELF_TOUCH_TRANSIENT.value, 0.45)
         if (
-            self._elapsed(self.phone_to_ear_since_ms, timestamp_ms)
-            >= self.config.phone_to_ear_sustain_ms
+            hand.near_ear
+            and self.config.ear_scratch_motion_filter_enabled
+            and phone_to_ear_ms < self.config.ear_scratch_max_warning_ms
+            and self.config.ear_scratch_local_motion_min_px
+            <= getattr(self, "_last_ear_motion_px", 0.0)
+            <= self.config.ear_scratch_local_motion_max_px
+        ):
+            return PlaceholderState(MobileDistractionState.EAR_SCRATCH_GESTURE.value, 0.5)
+        if (
+            phone_to_ear_ms >= self.config.phone_to_ear_confirmed_ms
+            and self.last_phone_object.detected
+            and self.last_phone_object.region == "DRIVER_FACE_NEAR_EAR"
+        ):
+            return PlaceholderState(MobileDistractionState.PHONE_TO_EAR_CONFIRMED.value, 0.92)
+        if (
+            phone_to_ear_ms >= self.config.phone_to_ear_suspected_ms
+            and (
+                self.last_phone_object.detected
+                or not self.config.phone_to_ear_requires_phone_object_for_confirmed
+            )
         ):
             return PlaceholderState(
                 MobileDistractionState.PHONE_TO_EAR_SUSPECTED.value,
                 max(0.78, min(0.95, hand.confidence)),
             )
+        if phone_to_ear_ms >= self.config.phone_to_ear_candidate_ms:
+            return PlaceholderState(MobileDistractionState.PHONE_TO_EAR_CANDIDATE.value, 0.58)
         if self._elapsed(self.down_since_ms, timestamp_ms) >= self.config.phone_down_suspect_ms:
             return PlaceholderState(MobileDistractionState.PHONE_DOWN_SUSPECTED.value, 0.65)
         if hand.near_face:
@@ -213,12 +243,18 @@ class MobileDistractionEstimator:
             if ear_distance <= min(threshold, ear_threshold_px) or side_hit or wrist_side_hit or index_side_hit:
                 context.near_ear = True
                 context.ear_side = "LEFT" if self._point_in_roi(hand_center, side_rois["left"]) else "RIGHT"
+                if self._last_ear_hand_center is not None:
+                    self._last_ear_motion_px = dist(hand_center, self._last_ear_hand_center)
+                self._last_ear_hand_center = hand_center
             if wrist[1] > y2 and index_tip[1] > y1 + face_h * 0.5:
                 context.lower_region = True
             context.hand_bbox_norm = hand_bbox_norm
             context.confidence = max(context.confidence, 0.65)
             if context.near_ear:
                 context.confidence = max(context.confidence, 0.82)
+        if not context.near_ear:
+            self._last_ear_hand_center = None
+            self._last_ear_motion_px = 0.0
         return context
 
     def _face_anchors(

@@ -327,6 +327,21 @@ class DMSV02DecisionMatrix:
             "VISUAL_ATTENTION_LOSS",
             "GAZE_OFF_ROAD_SUSTAINED",
         }
+        stale_normal_reasons = classification_attention_loss | {
+            "PHONE_TO_EAR_SUSPECTED",
+            "PHONE_TO_EAR_CONFIRMED",
+            "PHONE_TO_EAR_CANDIDATE",
+            "PHONE_TO_EAR",
+            "PHONE_SUSPECTED",
+            "PHONE_CONFIRMED",
+            "HEAD_DOWN",
+            "FACE_LOST",
+            "DRIVER_FACE_NOT_VISIBLE",
+            "DRIVER_FACE_LOST_TEMP",
+            "SIDE_PROFILE_FACE_LOST",
+            "LOW_EYE_VISIBILITY",
+            "HEAD_POSE_UNRELIABLE",
+        }
         cleaned = [reason for reason in reasons if reason not in {"VALID"}]
         low_head_motion_present = "LOW_HEAD_MOTION" in cleaned
         if banner == "DMS DEGRADED":
@@ -338,7 +353,7 @@ class DMSV02DecisionMatrix:
         if "RECOVERY_HOLD" in path:
             cleaned.extend(["DEGRADED_RECOVERY_HOLD", "OBSERVATION_RECOVERY_WAIT"])
         if banner == "NORMAL":
-            cleaned = [reason for reason in cleaned if reason not in classification_attention_loss]
+            cleaned = [reason for reason in cleaned if reason not in stale_normal_reasons]
             cleaned.append("ROAD_GAZE_CONFIRMED")
         elif banner == "DMS MONITOR":
             cleaned = ["SHORT_GLANCE_AWAY" if reason == "GAZE_OFF_ROAD" else reason for reason in cleaned]
