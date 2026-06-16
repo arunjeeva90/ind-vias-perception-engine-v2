@@ -67,11 +67,12 @@ class OverlayRenderer:
         show_track_id: bool = False,
         face_proposals: list[FaceProposal] | None = None,
         driver_roi_norm: tuple[float, float, float, float] | None = None,
+        show_debug_proposal_boxes: bool = False,
     ) -> np.ndarray:
         out = frame.copy()
         if driver_roi_norm is not None:
             self._draw_norm_roi(out, driver_roi_norm)
-        if face_proposals:
+        if face_proposals and show_debug_proposal_boxes:
             self._draw_face_proposals(out, face_proposals)
         if draw_all_faces and faces:
             self._draw_occupant_boxes(out, faces, state, show_track_id)
@@ -186,8 +187,17 @@ class OverlayRenderer:
         proposals: list[FaceProposal],
     ) -> None:
         for proposal in proposals:
-            color = (255, 180, 40) if proposal.roi_name != "DRIVER_ROI" else (255, 120, 0)
+            color = (180, 160, 120)
             cv2.rectangle(frame, proposal.bbox[:2], proposal.bbox[2:], color, 1)
+            cv2.putText(
+                frame,
+                "RAW PROPOSAL / NOT VALIDATED",
+                (proposal.bbox[0], max(18, proposal.bbox[1] - 4)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                color,
+                1,
+            )
 
     def _draw_head_axis(
         self,
@@ -351,6 +361,9 @@ def status_dashboard_lines(
         ("Face proposals", str(state.dms_health.face_proposals)),
         ("Face det conf", f"{state.dms_health.face_detection_confidence:.2f}"),
         ("Driver face", state.driver_presence.state.value),
+        ("Driver face state", state.driver_identity.driver_face_state),
+        ("Proposal state", state.driver_identity.face_proposal_state),
+        ("Track hold", state.driver_identity.driver_track_hold_state),
         ("Observability", state.driver_observability.state.value),
         ("Obs reason", ",".join(state.driver_observability.reason_codes) or "NONE"),
         ("Raw eyes", state.drowsiness.raw_eye_state),

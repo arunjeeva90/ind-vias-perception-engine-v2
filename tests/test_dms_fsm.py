@@ -2351,3 +2351,110 @@ def test_glasses_low_eye_confidence_degrades_not_unavailable():
 
     assert availability.state == AvailabilityState.DEGRADED
     assert "GLASSES_REFLECTION_LOW_EYE_CONFIDENCE" in availability.reason_codes
+
+
+def test_webcam_driver_zone_proposal_failed_landmarks_not_unavailable():
+    pipeline = DMSPipeline.__new__(DMSPipeline)
+    pipeline.config = DMSConfig()
+    pipeline.road_calibration_source = "DEFAULT"
+    pipeline.face_backend = type("Backend", (), {"last_nir_mode": "BGR"})()
+
+    availability = pipeline._availability(
+        FaceLandmarkResult(False),
+        EyeState(is_closed=False, confidence=0.0),
+        DrowsinessLevel.UNKNOWN,
+        DistractionLevel.UNKNOWN,
+        no_face_duration_ms=5000,
+        eye_closure_duration_ms=0,
+        eyes_off_road_duration_ms=0,
+        gaze_zone=GazeZone.UNKNOWN,
+        occupant_count=0,
+        driver_body_state="UNKNOWN",
+        driver_observability=DriverObservabilityState.PARTIALLY_OBSERVABLE.value,
+        driver_proposal_visible=True,
+        driver_proposal_reason_codes=["DRIVER_ZONE_PROPOSAL_PRESENT"],
+        driver_proposal_visible_ms=800,
+    )
+
+    assert availability.state == AvailabilityState.DEGRADED
+    assert "DRIVER_UNAVAILABLE_SUPPRESSED_PROPOSAL_PRESENT" in availability.reason_codes
+    assert "PROPOSAL_ONLY_NOT_DRIVER_ABSENT" in availability.reason_codes
+
+
+def test_webcam_proposal_visible_presence_state():
+    pipeline = DMSPipeline.__new__(DMSPipeline)
+    pipeline.config = DMSConfig()
+    pipeline.occupants = type("Occupants", (), {"driver_last_seen_ms": None})()
+
+    presence = pipeline._presence_state(
+        face_found=False,
+        occupant_count=0,
+        no_face_duration_ms=2500,
+        session_state="UNKNOWN",
+        driver_proposal_visible=True,
+    )
+
+    assert presence == PresenceState.PROPOSAL_VISIBLE
+
+
+def test_webcam_proposal_only_driver_maps_to_monitor_not_critical():
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    availability.reason_codes = [
+        "DRIVER_ZONE_PROPOSAL_PRESENT",
+        "FACE_PROPOSAL_LANDMARK_FAILED",
+        "DRIVER_UNAVAILABLE_SUPPRESSED_PROPOSAL_PRESENT",
+    ]
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(
+            availability=availability,
+            driver_present=False,
+            driver_proposal_visible=True,
+            driver_track_held=True,
+            no_face_duration_ms=3000,
+            driver_observability=DriverObservabilityState.PARTIALLY_OBSERVABLE.value,
+        )
+    )
+
+    assert decision.final_banner == "DMS MONITOR"
+    assert decision.driver_availability_state == "DEGRADED"
+    assert "NORMAL_ALLOWED_PROPOSAL_VISIBLE_HELD" in decision.reason_codes
+
+
+def test_webcam_normal_blocked_when_attention_degraded():
+    attention = DMSState().attention
+    attention.attention_state = AttentionState.DEGRADED
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(_v02_inputs(attention=attention))
+
+    assert decision.final_banner == "DMS MONITOR"
+
+
+def test_webcam_raw_face_proposal_hidden_by_default():
+    from ind_vias_dms.vision.face_proposals import FaceProposal
+
+    frame = np.zeros((100, 120, 3), dtype=np.uint8)
+    proposal = FaceProposal((10, 65, 50, 95), 0.9, "unit", "REAR")
+    rendered = OverlayRenderer().draw_video_overlay(
+        frame,
+        DMSState(),
+        FaceLandmarkResult(False),
+        HeadPose(confidence=0.0),
+        fps=30.0,
+        draw_panel=False,
+        face_proposals=[proposal],
+        show_debug_proposal_boxes=False,
+    )
+
+    assert np.array_equal(rendered[60:100], frame[60:100])
+
+
+def test_webcam_debug_trace_flags_unavailable_with_proposal():
+    state = DMSState()
+    state.driver_availability.state = AvailabilityState.UNAVAILABLE
+    state.driver_identity.driver_proposal_visible = True
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+
+    record = build_debug_record(state, {"face": FaceLandmarkResult(False)}, frame)
+
+    assert "DRIVER_UNAVAILABLE_WITH_PROPOSAL" in record["contradiction_flags"]
+    assert "PROPOSAL_ONLY_DRIVER_FRAME" in record["contradiction_flags"]
