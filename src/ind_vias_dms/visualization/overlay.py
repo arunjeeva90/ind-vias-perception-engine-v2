@@ -460,12 +460,19 @@ def status_dashboard_lines(
         ),
         (
             "Head angle",
-            "raw yaw/pitch/roll = "
-            f"{state.gaze.head_pose_raw_yaw_deg:.1f}/{state.gaze.head_pose_raw_pitch_deg:.1f}/"
-            f"{state.gaze.head_pose_raw_roll_deg:.1f} deg | road-relative yaw/pitch/roll = "
-            f"{state.gaze.relative_yaw_deg:.1f}/{state.gaze.relative_pitch_deg:.1f}/"
-            f"{state.gaze.relative_roll_deg:.1f} deg | road-vector angle = "
-            f"{state.gaze.head_angle_from_road_deg:.1f} deg",
+            "Yaw "
+            f"{_angle_label(state.gaze.relative_yaw_deg, 'L', 'R')} | Pitch "
+            f"{_angle_label(state.gaze.relative_pitch_deg, 'U', 'D')} | Roll "
+            f"{_angle_label(state.gaze.relative_roll_deg, 'L', 'R')} | Vector "
+            f"{state.gaze.head_angle_from_road_deg:.0f} | Quality "
+            f"{state.gaze.head_pose_vector_quality:.2f}",
+        ),
+        (
+            "Head angle raw",
+            f"raw yaw/pitch/roll = {state.gaze.head_pose_raw_yaw_deg:.1f}/"
+            f"{state.gaze.head_pose_raw_pitch_deg:.1f}/{state.gaze.head_pose_raw_roll_deg:.1f} deg | "
+            f"road-relative yaw/pitch/roll = {state.gaze.relative_yaw_deg:.1f}/"
+            f"{state.gaze.relative_pitch_deg:.1f}/{state.gaze.relative_roll_deg:.1f} deg",
         ),
         ("Head vector quality", f"{state.gaze.head_pose_vector_quality:.2f}"),
         ("Side glance", f"{state.attention.side_glance_state} {state.attention.side_glance_duration_ms}ms"),
@@ -481,6 +488,13 @@ def status_dashboard_lines(
         ("Readiness", f"{state.driver_readiness_score.score_0_to_1:.2f}"),
         ("Risk", state.driver_readiness_score.risk_level.value),
     ]
+
+
+def _angle_label(value: float, negative_label: str, positive_label: str, limit: float = 90.0) -> str:
+    if abs(value) > limit:
+        return "POSE_OUT_OF_HUMAN_RANGE"
+    direction = positive_label if value >= 0 else negative_label
+    return f"{direction}{abs(value):02.0f}"
 
 
 def occupant_label(

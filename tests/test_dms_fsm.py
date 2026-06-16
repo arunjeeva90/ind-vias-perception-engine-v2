@@ -43,7 +43,7 @@ from ind_vias_dms.vision.face_landmarks import FaceLandmarkResult, FaceQualityRe
 from ind_vias_dms.vision.gaze import GazeEstimator
 from ind_vias_dms.vision.gaze import GazeEstimate
 from ind_vias_dms.vision.head_pose import HeadPose, normalize_angle_deg
-from ind_vias_dms.vision.phone_detection import MobileDistractionEstimator
+from ind_vias_dms.vision.phone_detection import HandContext, MobileDistractionEstimator
 from ind_vias_dms.utils.learning_memory import LearningMemoryWriter
 from ind_vias_dms.visualization.overlay import (
     OverlayRenderer,
@@ -736,20 +736,20 @@ def test_loaded_calibration_can_mark_gaze_source_file(tmp_path):
     assert loaded.source == "FILE"
 
 
-def test_phone_to_ear_hand_near_driver_ear_escalates_after_sustain():
+def test_phone_to_ear_hand_near_driver_ear_becomes_candidate_after_sustain():
     from ind_vias_dms.vision.phone_detection import HandContext, MobileDistractionEstimator
 
     estimator = MobileDistractionEstimator.__new__(MobileDistractionEstimator)
-    estimator.config = DMSConfig(phone_to_ear_sustain_ms=700)
+    estimator.config = DMSConfig()
     estimator.down_since_ms = None
     estimator.phone_to_ear_since_ms = None
     estimator.texting_since_ms = None
 
     estimator._update_timer("phone_to_ear_since_ms", 0, True)
-    state = estimator._classify_from_context(HandContext(near_ear=True, confidence=0.85), False, 800)
+    state = estimator._classify_from_context(HandContext(near_ear=True, confidence=0.85), False, 2200)
 
-    assert state.state == "PHONE_TO_EAR_SUSPECTED"
-    assert state.confidence >= 0.85
+    assert state.state == "PHONE_TO_EAR_CANDIDATE"
+    assert state.confidence >= 0.5
 
 
 def test_short_phone_to_ear_under_sustain_does_not_immediately_warn():
@@ -764,7 +764,7 @@ def test_short_phone_to_ear_under_sustain_does_not_immediately_warn():
     estimator._update_timer("phone_to_ear_since_ms", 0, True)
     state = estimator._classify_from_context(HandContext(near_ear=True, near_face=True, confidence=0.85), False, 300)
 
-    assert state.state == "HAND_NEAR_FACE"
+    assert state.state == "SELF_TOUCH_TRANSIENT"
 
 
 def test_passenger_remote_hand_does_not_trigger_driver_phone_to_ear():
@@ -2049,9 +2049,12 @@ def test_v023_status_dashboard_includes_head_angle_line():
     lines = dict(status_dashboard_lines(state, fps=30.0))
 
     assert "Head angle" in lines
-    assert "raw yaw/pitch/roll" in lines["Head angle"]
-    assert "road-relative yaw/pitch/roll" in lines["Head angle"]
-    assert "road-vector angle" in lines["Head angle"]
+    assert "Yaw R42" in lines["Head angle"]
+    assert "Pitch D02" in lines["Head angle"]
+    assert "Vector 42" in lines["Head angle"]
+    assert "Quality" in lines["Head angle"]
+    assert "raw yaw/pitch/roll" in lines["Head angle raw"]
+    assert "road-relative yaw/pitch/roll" in lines["Head angle raw"]
     assert lines["Head vector quality"] == "0.00"
 
 
@@ -2458,3 +2461,131 @@ def test_webcam_debug_trace_flags_unavailable_with_proposal():
 
     assert "DRIVER_UNAVAILABLE_WITH_PROPOSAL" in record["contradiction_flags"]
     assert "PROPOSAL_ONLY_DRIVER_FRAME" in record["contradiction_flags"]
+
+
+def test_v0241_short_hand_to_ear_is_self_touch_not_phone_warning():
+    estimator = MobileDistractionEstimator(DMSConfig())
+    estimator.phone_to_ear_since_ms = 0
+
+    state = estimator._classify_from_context(
+        HandContext(near_face=True, near_ear=True, confidence=0.82),
+        gaze_down=False,
+        timestamp_ms=900,
+    )
+
+    assert state.state == "SELF_TOUCH_TRANSIENT"
+
+
+def test_v0241_ear_scratch_suppresses_phone_to_ear_suspected():
+    estimator = MobileDistractionEstimator(DMSConfig())
+    estimator.phone_to_ear_since_ms = 0
+    estimator._last_ear_motion_px = 12.0
+
+    state = estimator._classify_from_context(
+        HandContext(near_face=True, near_ear=True, confidence=0.82),
+        gaze_down=False,
+        timestamp_ms=1900,
+    )
+
+    assert state.state == "EAR_SCRATCH_GESTURE"
+
+
+def test_v0241_phone_to_ear_confirmed_requires_object_when_configured():
+    estimator = MobileDistractionEstimator(DMSConfig(phone_to_ear_requires_phone_object_for_confirmed=True))
+    estimator.phone_to_ear_since_ms = 0
+
+    state = estimator._classify_from_context(
+        HandContext(near_face=True, near_ear=True, confidence=0.82),
+        gaze_down=False,
+        timestamp_ms=3200,
+    )
+
+    assert state.state == "PHONE_TO_EAR_CANDIDATE"
+
+
+def test_v0241_self_touch_normalizes_to_no_phone_with_suppression_reason():
+    pipeline = DMSPipeline(DMSConfig())
+    try:
+        state, reasons = pipeline._normalize_phone_state(
+            "EAR_SCRATCH_GESTURE",
+            GazeZone.ROAD,
+            head_pitch_deg=0.0,
+            eyes_off_road_ms=0,
+        )
+    finally:
+        pipeline.close()
+
+    assert state == "NO_PHONE"
+    assert "EAR_SCRATCH_GESTURE" in reasons
+    assert "PHONE_TO_EAR_SUPPRESSED_SELF_TOUCH" in reasons
+    assert "PHONE_TO_EAR_SUPPRESSED_ROAD_GAZE" in reasons
+
+
+def test_v0241_unrealistic_pose_jump_with_valid_face_holds_previous_stable_pose():
+    pipeline = DMSPipeline(DMSConfig())
+    try:
+        pipeline._last_stable_head_pose = HeadPose(yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0, confidence=0.8)
+        pipeline._last_stable_pose_ms = 1000
+        face = FaceLandmarkResult(
+            face_found=True,
+            confidence=0.9,
+            landmarks_px={idx: (float(idx), float(idx)) for idx in range(478)},
+        )
+        face.quality = FaceQualityResult(
+            landmark_count=478,
+            landmark_coverage_score=0.9,
+            face_completeness_score=0.9,
+        )
+
+        should_hold = pipeline._should_hold_previous_pose(
+            face,
+            EyeState(openness=0.3, confidence=0.85),
+            HeadPose(yaw_deg=45.0, pitch_deg=50.0, roll_deg=5.0, confidence=0.8),
+            timestamp_ms=1066,
+        )
+    finally:
+        pipeline.close()
+
+    assert should_hold
+
+
+def test_v0241_normal_final_reasons_do_not_keep_stale_phone_or_pose_codes():
+    attention = DMSState().attention
+    attention.attention_state = AttentionState.NORMAL
+    attention.attention_substate = AttentionSubstate.ROAD
+    attention.attention_reason_codes = ["HEAD_POSE_UNRELIABLE", "PHONE_TO_EAR_SUSPECTED"]
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(_v02_inputs(attention=attention))
+
+    assert decision.final_banner == "NORMAL"
+    assert "HEAD_POSE_UNRELIABLE" not in decision.classification_reason_codes
+    assert "PHONE_TO_EAR_SUSPECTED" not in decision.classification_reason_codes
+
+
+def test_v0241_status_dashboard_uses_human_readable_head_angle_line():
+    state = DMSState()
+    state.gaze.relative_yaw_deg = -12.0
+    state.gaze.relative_pitch_deg = 4.0
+    state.gaze.relative_roll_deg = -2.0
+    state.gaze.head_angle_from_road_deg = 13.0
+    state.gaze.head_pose_vector_quality = 0.85
+
+    lines = dict(status_dashboard_lines(state, fps=30.0))
+
+    assert lines["Head angle"] == "Yaw L12 | Pitch D04 | Roll L02 | Vector 13 | Quality 0.85"
+
+
+def test_v0241_cli_parser_accepts_start_and_end_ms():
+    from apps.run_dms_demo import build_parser
+
+    args = build_parser().parse_args([
+        "--video",
+        "sample.mp4",
+        "--start-ms",
+        "17000",
+        "--end-ms",
+        "23500",
+    ])
+
+    assert args.start_ms == 17000
+    assert args.end_ms == 23500

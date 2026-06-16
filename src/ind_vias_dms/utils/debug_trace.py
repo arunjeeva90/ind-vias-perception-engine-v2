@@ -171,6 +171,24 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         contradiction_flags.append("PROPOSAL_ONLY_DRIVER_FRAME")
     if state.dms_v02.final_banner == "DMS DEGRADED" and abs(state.gaze.relative_yaw_deg) <= 30.0:
         contradiction_flags.append("DMS_DEGRADED_VISIBLE_NEAR_ROAD")
+    if state.dms_v02.final_banner == "NORMAL":
+        final_codes = set(state.dms_v02.classification_reason_codes or state.dms_v02.reason_codes)
+        if final_codes & {"PHONE_TO_EAR_SUSPECTED", "PHONE_TO_EAR_CONFIRMED", "PHONE_TO_EAR_CANDIDATE"}:
+            contradiction_flags.append("NORMAL_WITH_STALE_PHONE_REASON")
+        if final_codes & {"FACE_LOST", "DRIVER_FACE_LOST_TEMP", "SIDE_PROFILE_FACE_LOST"}:
+            contradiction_flags.append("NORMAL_WITH_STALE_FACE_LOST_REASON")
+        if "HEAD_POSE_UNRELIABLE" in final_codes:
+            contradiction_flags.append("NORMAL_WITH_STALE_POSE_UNRELIABLE_REASON")
+        if final_codes & {
+            "PHONE_TO_EAR_SUSPECTED",
+            "HEAD_DOWN",
+            "FACE_LOST",
+            "LOW_EYE_VISIBILITY",
+            "SIDE_PROFILE_FACE_LOST",
+            "GAZE_OFF_ROAD_SUSTAINED",
+            "HEAD_POSE_UNRELIABLE",
+        }:
+            contradiction_flags.append("NORMAL_WITH_STALE_CLASSIFICATION_REASON")
 
     classification_reason_codes = list(
         state.dms_v02.classification_reason_codes or state.dms_v02.reason_codes
