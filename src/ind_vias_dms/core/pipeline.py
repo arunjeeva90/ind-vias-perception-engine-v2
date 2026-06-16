@@ -94,6 +94,7 @@ class DMSPipeline:
         self.last_reliable_gaze_away_ms: int | None = None
         self.road_calibration_source = "DEFAULT"
         self.valid_eye_observation_since_ms: int | None = None
+        self.driver_proposal_visible_since_ms: int | None = None
 
     def process(
         self,
@@ -110,6 +111,19 @@ class DMSPipeline:
         session = self.driver_session.update(selection.driver, timestamp_ms)
         driver_track_changed = selection.driver_track_changed
         face = selection.driver.observation if selection.driver is not None else FaceLandmarkResult(False)
+        driver_proposal = self._driver_proposal_context(frame.shape)
+        driver_proposal_visible = bool(driver_proposal["visible"])
+        proposal_only_driver_visible = driver_proposal_visible and not bool(face.landmarks_px)
+        if proposal_only_driver_visible:
+            if self.driver_proposal_visible_since_ms is None:
+                self.driver_proposal_visible_since_ms = timestamp_ms
+        else:
+            self.driver_proposal_visible_since_ms = None
+        driver_proposal_visible_ms = (
+            timestamp_ms - self.driver_proposal_visible_since_ms
+            if self.driver_proposal_visible_since_ms is not None
+            else 0
+        )
         driver_session_held = session.session_state == DriverSessionState.LOST_TEMP
         body_state = self.driver_body.update(face, timestamp_ms, driver_session_held)
         if face.face_found:
@@ -382,6 +396,7 @@ class DMSPipeline:
             body_state.state,
             no_face_duration_ms,
             pose_unreliable,
+            proposal_only_driver_visible,
         )
         availability = self._availability(
             face,
@@ -404,6 +419,9 @@ class DMSPipeline:
             self._perclos_pause_reason(driver_session_held, eye_temporal.valid_for_perclos),
             attention,
             observability.state.value,
+            proposal_only_driver_visible,
+            list(driver_proposal["reason_codes"]),
+            driver_proposal_visible_ms,
         )
         readiness = self._readiness(
             face,
@@ -421,7 +439,7 @@ class DMSPipeline:
         )
         health = DMSHealth(
             camera_status=CameraStatus.OK,
-            face_detection_status=CameraStatus.OK if selection.faces else CameraStatus.NO_FACE,
+            face_detection_status=CameraStatus.OK if selection.faces or self.face_backend.last_proposals else CameraStatus.NO_FACE,
             face_visibility_score=face.confidence if face.face_found else 0.0,
             eye_visibility_score=eye_state.confidence,
             confidence=min(face.confidence, eye_state.confidence)
@@ -474,6 +492,8 @@ class DMSPipeline:
                 driver_body_present=body_state.state == "PRESENT",
                 no_face_duration_ms=no_face_duration_ms,
                 driver_observability=observability.state.value,
+                driver_proposal_visible=proposal_only_driver_visible,
+                driver_track_held=proposal_only_driver_visible or driver_session_held,
             )
         )
         state = DMSState(
@@ -486,8 +506,9 @@ class DMSPipeline:
                     len(selection.faces),
                     no_face_duration_ms,
                     session.session_state.value,
+                    proposal_only_driver_visible,
                 ),
-                confidence=face.confidence if face.face_found else 0.0,
+                confidence=face.confidence if face.face_found else float(driver_proposal["confidence"]),
             ),
             driver_observability=observability,
             driver_availability=availability,
@@ -550,6 +571,11 @@ class DMSPipeline:
                     if selection.driver and selection.driver.observation.quality
                     else False
                 ),
+                face_proposal_state=str(driver_proposal["face_proposal_state"]),
+                driver_face_state=self._driver_face_state(face, proposal_only_driver_visible),
+                driver_proposal_visible=proposal_only_driver_visible,
+                driver_proposal_bbox_norm=list(driver_proposal["bbox_norm"]),
+                driver_track_hold_state="PROPOSAL_VISIBLE_HELD" if proposal_only_driver_visible else "NONE",
             ),
             gaze=GazeState(
                 zone=gaze_estimate.zone,
@@ -603,6 +629,7 @@ class DMSPipeline:
             "driver_session": session,
             "driver_body": body_state,
             "face_proposals": self.face_backend.last_proposals,
+            "driver_proposal_candidate": driver_proposal,
             "face_backend": self.face_backend.last_backend_used,
             "nir_mode": self.face_backend.last_nir_mode,
             "driver_roi_norm": self.occupants._roi("driver_roi_norm"),
@@ -633,6 +660,74 @@ class DMSPipeline:
         self.road_calibration_source = "DEFAULT"
         return self.gaze_estimator.yaw_offset_deg, self.gaze_estimator.pitch_offset_deg
 
+    def _driver_proposal_context(self, frame_shape: tuple[int, int, int]) -> dict[str, object]:
+        height, width = frame_shape[:2]
+        driver_roi = self.occupants._roi("driver_roi_norm")
+        best: tuple[object, tuple[float, float, float, float], float] | None = None
+        best_score = 0.0
+        for proposal in self.face_backend.last_proposals:
+            x1, y1, x2, y2 = proposal.bbox
+            box_norm = (x1 / width, y1 / height, x2 / width, y2 / height)
+            overlap = self._box_overlap_norm(box_norm, driver_roi)
+            center_x = (box_norm[0] + box_norm[2]) / 2.0
+            center_y = (box_norm[1] + box_norm[3]) / 2.0
+            center_in_roi = driver_roi[0] <= center_x <= driver_roi[2] and driver_roi[1] <= center_y <= driver_roi[3]
+            if proposal.confidence < self.config.face_proposal_min_confidence:
+                continue
+            if overlap <= 0.0 and not center_in_roi:
+                continue
+            score = proposal.confidence + overlap + (0.25 if center_in_roi else 0.0)
+            if score > best_score:
+                best = (proposal, box_norm, overlap)
+                best_score = score
+        if best is None:
+            return {
+                "visible": False,
+                "face_proposal_state": "NO_PROPOSAL" if not self.face_backend.last_proposals else "PROPOSAL_PRESENT",
+                "confidence": 0.0,
+                "bbox_norm": [],
+                "reason_codes": [],
+            }
+        proposal, box_norm, _overlap = best
+        return {
+            "visible": True,
+            "face_proposal_state": "DRIVER_ZONE_PROPOSAL_PRESENT",
+            "confidence": proposal.confidence,
+            "bbox_norm": list(box_norm),
+            "reason_codes": [
+                "DRIVER_ZONE_PROPOSAL_PRESENT",
+                "FACE_PROPOSAL_LANDMARK_FAILED",
+                "DRIVER_NOT_VALIDATED_BUT_VISIBLE_PROPOSAL",
+                "PROPOSAL_ONLY_NOT_DRIVER_ABSENT",
+            ],
+        }
+
+    @staticmethod
+    def _box_overlap_norm(
+        box: tuple[float, float, float, float],
+        roi: tuple[float, float, float, float],
+    ) -> float:
+        x1 = max(box[0], roi[0])
+        y1 = max(box[1], roi[1])
+        x2 = min(box[2], roi[2])
+        y2 = min(box[3], roi[3])
+        inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        area = max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+        return inter / max(area, 1e-6)
+
+    @staticmethod
+    def _driver_face_state(face: FaceLandmarkResult, proposal_only_visible: bool = False) -> str:
+        if face.landmarks_px:
+            quality_state = face.quality.validation_state if face.quality else "VALIDATED"
+            if quality_state in {"VALID", "VALIDATED", "FULL_FACE", "SIDE_PROFILE"}:
+                return "VALIDATED"
+            return "PARTIAL"
+        if proposal_only_visible:
+            return "LANDMARK_FAILED"
+        if face.face_found:
+            return "PROPOSAL_ONLY"
+        return "NOT_VISIBLE"
+
     def _reset_driver_temporal(self) -> None:
         self.head_pose_smoother.reset()
         self.eye_temporal.reset()
@@ -654,6 +749,7 @@ class DMSPipeline:
         driver_body_state: str,
         no_face_duration_ms: int,
         head_pose_unreliable: bool,
+        driver_proposal_visible: bool = False,
     ) -> DriverObservability:
         if face.face_found:
             reasons: list[str] = []
@@ -674,6 +770,18 @@ class DMSPipeline:
                 DriverObservabilityState.OBSERVABLE,
                 min(1.0, max(face.confidence, eye_state.confidence)),
                 ["DRIVER_OBSERVABLE"],
+            )
+        if driver_proposal_visible:
+            return DriverObservability(
+                DriverObservabilityState.PARTIALLY_OBSERVABLE,
+                0.45,
+                [
+                    "DRIVER_ZONE_PROPOSAL_PRESENT",
+                    "FACE_PROPOSAL_LANDMARK_FAILED",
+                    "DRIVER_NOT_VALIDATED_BUT_VISIBLE_PROPOSAL",
+                    "PROPOSAL_ONLY_NOT_DRIVER_ABSENT",
+                    "DEGRADED_SUPPRESSED_PROPOSAL_VISIBLE",
+                ],
             )
         if session_state == DriverSessionState.LOST_TEMP.value or driver_body_state == "PRESENT":
             reasons = [
@@ -916,6 +1024,9 @@ class DMSPipeline:
         perclos_pause_reason: str | None = None,
         attention: AttentionOutput | None = None,
         driver_observability: str = "UNKNOWN",
+        driver_proposal_visible: bool = False,
+        driver_proposal_reason_codes: list[str] | None = None,
+        driver_proposal_visible_ms: int = 0,
     ) -> DriverAvailability:
         session_reasons = session_reason_codes or []
         attention_reasons = list(attention.attention_reason_codes) if attention is not None else []
@@ -925,6 +1036,24 @@ class DMSPipeline:
                 0.05,
                 list(dict.fromkeys(attention_reasons + ["MICROSLEEP_CANDIDATE"])),
             )
+        if driver_proposal_visible:
+            reasons = list(
+                dict.fromkeys(
+                    (driver_proposal_reason_codes or [])
+                    + [
+                        "DRIVER_ZONE_PROPOSAL_PRESENT",
+                        "FACE_PROPOSAL_LANDMARK_FAILED",
+                        "DRIVER_NOT_VALIDATED_BUT_VISIBLE_PROPOSAL",
+                        "DRIVER_UNAVAILABLE_SUPPRESSED_PROPOSAL_PRESENT",
+                        "PROPOSAL_ONLY_NOT_DRIVER_ABSENT",
+                        "PERCLOS_PAUSED_LANDMARK_FAILED",
+                    ]
+                    + (["NIGHT_UNAVAILABLE_SUPPRESSED_PROPOSAL_PRESENT"] if self.face_backend.last_nir_mode == "NIR_PREPROCESSED" else [])
+                    + (["WEBCAM_HOLD_EXPIRED"] if driver_proposal_visible_ms > self.config.webcam_proposal_visible_hold_ms else ["WEBCAM_DRIVER_TRACK_HELD", "FACE_MESH_DROPOUT_HELD"])
+                )
+            )
+            confidence = 0.45 if driver_proposal_visible_ms <= self.config.webcam_proposal_visible_hold_ms else 0.35
+            return DriverAvailability(AvailabilityState.DEGRADED, confidence, reasons)
         if session_state == DriverSessionState.LOST_TEMP.value:
             reasons = [
                 "DRIVER_FACE_LOST_TEMP",
@@ -1270,9 +1399,12 @@ class DMSPipeline:
         occupant_count: int,
         no_face_duration_ms: int = 0,
         session_state: str = "UNKNOWN",
+        driver_proposal_visible: bool = False,
     ) -> PresenceState:
         if face_found:
             return PresenceState.PRESENT
+        if driver_proposal_visible:
+            return PresenceState.PROPOSAL_VISIBLE
         if session_state == DriverSessionState.LOST_TEMP.value:
             return PresenceState.LOST_TEMP
         if session_state == DriverSessionState.LOST_LONG.value:

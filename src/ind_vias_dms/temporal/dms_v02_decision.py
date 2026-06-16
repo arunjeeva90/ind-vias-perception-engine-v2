@@ -33,6 +33,8 @@ class DMSV02Inputs:
     driver_body_present: bool
     no_face_duration_ms: int
     driver_observability: str = "UNKNOWN"
+    driver_proposal_visible: bool = False
+    driver_track_held: bool = False
 
 
 class DMSV02DecisionMatrix:
@@ -90,6 +92,14 @@ class DMSV02DecisionMatrix:
             level = DMSV02Level.MONITOR
             banner = "DMS MONITOR"
             path = f"MONITOR > {distraction_state}"
+        elif availability_state == "DEGRADED" and (inputs.driver_proposal_visible or inputs.driver_track_held):
+            level = DMSV02Level.MONITOR
+            banner = "DMS MONITOR"
+            path = "MONITOR > proposal_visible_or_track_held"
+        elif availability_state == "DEGRADED":
+            level = DMSV02Level.DEGRADED
+            banner = "DMS DEGRADED"
+            path = "DEGRADED > availability_degraded"
         elif confidence_state in {DMSConfidenceState.LOW, DMSConfidenceState.UNAVAILABLE}:
             level = DMSV02Level.DEGRADED
             banner = "DMS DEGRADED"
@@ -119,6 +129,8 @@ class DMSV02DecisionMatrix:
     def _confidence(self, inputs: DMSV02Inputs) -> DMSConfidenceState:
         if inputs.health.camera_status.value == "ERROR":
             return DMSConfidenceState.UNAVAILABLE
+        if inputs.driver_proposal_visible or inputs.driver_track_held:
+            return DMSConfidenceState.MEDIUM
         if not inputs.driver_present and inputs.no_face_duration_ms >= self.config.no_face_degraded_ms:
             return DMSConfidenceState.LOW
         if inputs.health.eye_visibility_score < self.config.eye_visibility_min_confidence:
@@ -216,6 +228,8 @@ class DMSV02DecisionMatrix:
                 return "DEGRADED"
             return "UNAVAILABLE"
         if inputs.no_face_duration_ms >= self.config.driver_absent_unavailable_ms:
+            if inputs.driver_proposal_visible or inputs.driver_track_held:
+                return "DEGRADED"
             if temp_unobservable:
                 return "DEGRADED"
             return "UNAVAILABLE"
@@ -244,15 +258,21 @@ class DMSV02DecisionMatrix:
             return level, banner, path
 
         elapsed_ms = timestamp_ms - (self._last_change_ms or timestamp_ms)
+        normal_blocked_now = self._last_banner == "NORMAL" and self._normal_blocked(inputs)
         if banner == "DMS DEGRADED" and self._last_banner in {"NORMAL", "DMS MONITOR"}:
             if self._degraded_candidate_since_ms is None:
                 self._degraded_candidate_since_ms = timestamp_ms
             if timestamp_ms - self._degraded_candidate_since_ms < self.config.degraded_entry_sustain_ms:
+                if normal_blocked_now:
+                    path = "MONITOR > degraded_candidate_normal_blocked"
+                    self._set_banner(timestamp_ms, DMSV02Level.MONITOR, "DMS MONITOR", path)
+                    return DMSV02Level.MONITOR, "DMS MONITOR", path
                 return self._last_level or level, self._last_banner, self._last_path
             critical_escalation = True
         else:
             self._degraded_candidate_since_ms = None
             critical_escalation = banner in {"DRIVER UNAVAILABLE", "DANGER", "DISTRACTION WARNING", "DROWSINESS WARNING"}
+            critical_escalation = critical_escalation or normal_blocked_now
 
         if self._last_banner == "DMS DEGRADED" and banner in {"NORMAL", "DMS MONITOR"}:
             if self._observation_strongly_recovered(inputs, banner):
@@ -322,6 +342,8 @@ class DMSV02DecisionMatrix:
             cleaned.append("ROAD_GAZE_CONFIRMED")
         elif banner == "DMS MONITOR":
             cleaned = ["SHORT_GLANCE_AWAY" if reason == "GAZE_OFF_ROAD" else reason for reason in cleaned]
+            if inputs.driver_proposal_visible or inputs.driver_track_held:
+                cleaned.extend(["NORMAL_ALLOWED_PROPOSAL_VISIBLE_HELD", "WEBCAM_DRIVER_TRACK_HELD"])
             if inputs.attention.ambiguous_attention_loss:
                 cleaned.extend(["AMBIGUOUS_ATTENTION_HOLD", "AMBIGUOUS_TO_MONITOR"])
         elif banner in {"DISTRACTION WARNING", "DANGER"} and (

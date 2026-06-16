@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--display", action="store_true")
     parser.add_argument("--status-window", action="store_true")
     parser.add_argument("--show-track-id", action="store_true")
+    parser.add_argument("--show-debug-proposal-boxes", action="store_true")
     parser.add_argument("--debug-trace", default=None)
     parser.add_argument("--event-log", default=None)
     parser.add_argument("--event-json", default=None)
@@ -137,6 +138,11 @@ def main() -> None:
                     show_track_id=args.show_track_id,
                     face_proposals=context["face_proposals"],
                     driver_roi_norm=context["driver_roi_norm"],
+                    show_debug_proposal_boxes=(
+                        args.show_debug_proposal_boxes
+                        or config.show_debug_proposal_boxes
+                        or config.show_raw_face_proposals
+                    ),
                 )
             if args.output is not None:
                 if writer is None:
