@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ import cv2  # noqa: E402
 from ind_vias_dms.core.config import load_dms_config  # noqa: E402
 from ind_vias_dms.core.pipeline import DMSPipeline  # noqa: E402
 from ind_vias_dms.core.road_calibration import load_road_calibration, save_road_calibration  # noqa: E402
+from ind_vias_dms.core.vehicle_state import VehicleStateManager  # noqa: E402
 from ind_vias_dms.interface.dms_packet import serialize_dms_state  # noqa: E402
 from ind_vias_dms.utils.debug_trace import DebugTraceRecorder  # noqa: E402
 from ind_vias_dms.utils.jsonl_writer import JSONLWriter  # noqa: E402
@@ -47,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-memory", default=None)
     parser.add_argument("--save-learning-keyframes", action="store_true")
     parser.add_argument("--save-learning-crops", action="store_true")
+    parser.add_argument("--live-output-fps", choices=("measured", "camera", "fixed"), default="measured")
+    parser.add_argument("--output-fps", type=float, default=None)
     parser.add_argument("--keyframe-before-ms", type=int, default=500)
     parser.add_argument("--keyframe-after-ms", type=int, default=500)
     return parser
@@ -83,6 +87,7 @@ def main() -> None:
         normal_min_hold_ms=config.normal_min_hold_ms,
         state_clear_confirm_ms=config.state_clear_confirm_ms,
     )
+    vehicle_manager = VehicleStateManager(config, output_fps_mode=args.live_output_fps)
     jsonl = JSONLWriter(args.jsonl)
     debug_trace = DebugTraceRecorder(
         trace_path=args.debug_trace,
@@ -112,18 +117,34 @@ def main() -> None:
 
     try:
         while args.max_frames is None or processed_frames < args.max_frames:
+            capture_start = time.perf_counter()
             ok, frame = cap.read()
+            capture_elapsed_ms = (time.perf_counter() - capture_start) * 1000.0
             if not ok:
                 break
             frame = resize_to_width(frame, config.frame_resize_width)
             timestamp_ms = int((frame_id / fps) * 1000)
             if args.end_ms is not None and timestamp_ms > args.end_ms:
                 break
+            process_start = time.perf_counter()
             state, context = pipeline.process(frame, timestamp_ms, frame_id)
+            process_elapsed_ms = (time.perf_counter() - process_start) * 1000.0
             state.gaze.calibration_source = road_calibration_source
-            jsonl.write(serialize_dms_state(state))
-            debug_trace.write_frame(state, context, frame)
-            learning_memory.write_frame(state, context, frame)
+            live_output_fps = _select_output_fps(
+                args.live_output_fps,
+                args.output_fps,
+                args.camera is not None,
+                fps,
+                float(context["fps"]),
+                config.output_fps,
+            )
+            state = vehicle_manager.update(
+                state,
+                timestamp_ms=timestamp_ms,
+                live_output_fps=live_output_fps,
+                frame_capture_time_ms=capture_elapsed_ms,
+                processing_time_ms=process_elapsed_ms,
+            )
 
             annotated = frame
             if args.debug_overlay or config.overlay_enabled:
@@ -157,8 +178,13 @@ def main() -> None:
                 )
             if args.output is not None:
                 if writer is None:
-                    writer = make_video_writer(args.output, fps, annotated)
+                    writer = make_video_writer(args.output, live_output_fps, annotated)
+                write_start = time.perf_counter()
                 writer.write(annotated)
+                state.vehicle.frame_write_time_ms = (time.perf_counter() - write_start) * 1000.0
+            jsonl.write(serialize_dms_state(state))
+            debug_trace.write_frame(state, context, frame)
+            learning_memory.write_frame(state, context, frame)
             if args.display:
                 if args.status_window or config.status_window_enabled:
                     cv2.imshow("IND-VIAS DualSight DMS - Video", annotated)
@@ -175,6 +201,8 @@ def main() -> None:
                         driver_roi_state=pipeline.occupants.driver_roi_state(),
                     )
                     cv2.imshow("IND-VIAS DualSight DMS - Status", status)
+                    if config.vehicle_monitor_window_enabled:
+                        cv2.imshow("IND-VIAS Vehicle Monitor", overlay.render_vehicle_monitor(state))
                 else:
                     cv2.imshow("IND-VIAS DualSight DMS", annotated)
                 key = cv2.waitKey(1) & 0xFF
@@ -206,6 +234,18 @@ def main() -> None:
                     yaw, pitch = pipeline.reset_road_gaze_calibration()
                     road_calibration_source = "DEFAULT"
                     print(f"Road gaze calibrated: yaw_offset={yaw:.2f}, pitch_offset={pitch:.2f}")
+                elif key in {ord("="), ord("+")}:
+                    vehicle_manager.increase_speed(fast=key == ord("+"))
+                    print(f"Sim speed: {vehicle_manager.speed_kph:.1f} km/h")
+                elif key == ord("-"):
+                    vehicle_manager.decrease_speed()
+                    print(f"Sim speed: {vehicle_manager.speed_kph:.1f} km/h")
+                elif key == ord("9"):
+                    vehicle_manager.toggle_left_indicator()
+                    print(f"Left indicator: {'ON' if vehicle_manager.left_indicator_on else 'OFF'}")
+                elif key == ord("0"):
+                    vehicle_manager.toggle_right_indicator()
+                    print(f"Right indicator: {'ON' if vehicle_manager.right_indicator_on else 'OFF'}")
             frame_id += 1
             processed_frames += 1
     finally:
@@ -233,6 +273,23 @@ def main() -> None:
         print(f"Wrote review bundle: {Path(args.review_bundle)}")
     if args.learning_memory is not None:
         print(f"Wrote learning memory: {Path(args.learning_memory)}")
+
+
+def _select_output_fps(
+    mode: str,
+    requested_fps: float | None,
+    is_camera: bool,
+    source_fps: float,
+    measured_fps: float,
+    config_fps: float,
+) -> float:
+    if not is_camera:
+        return max(1.0, float(source_fps or requested_fps or config_fps))
+    if mode == "fixed":
+        return max(1.0, float(requested_fps or config_fps))
+    if mode == "camera":
+        return max(1.0, float(source_fps or requested_fps or config_fps))
+    return max(1.0, float(measured_fps or source_fps or requested_fps or config_fps))
 
 
 if __name__ == "__main__":

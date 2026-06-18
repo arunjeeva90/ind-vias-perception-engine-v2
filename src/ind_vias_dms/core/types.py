@@ -202,6 +202,12 @@ class GazeState:
     relative_roll_deg: float = 0.0
     head_angle_from_road_deg: float = 0.0
     head_pose_vector_quality: float = 0.0
+    head_yaw_relative_label: str = "0"
+    head_pitch_relative_label: str = "0"
+    head_roll_relative_label: str = "0"
+    status_head_angle_line: str = ""
+    status_head_raw_rel_line: str = ""
+    head_angle_display_visible: bool = False
     road_axis_calibration_source: str = "DEFAULT"
     road_axis_calibration_confidence: float = 0.0
 
@@ -273,6 +279,48 @@ class DMSV02DecisionState:
     reason_codes: list[str] = field(default_factory=list)
     raw_observation_codes: list[str] = field(default_factory=list)
     classification_reason_codes: list[str] = field(default_factory=list)
+    alert_subtype: str = ""
+    alert_explanation: str = ""
+    hmi_banner_text: str = ""
+    hmi_primary_reason: str = ""
+    hmi_secondary_reason: str = ""
+
+
+@dataclass
+class VehicleRuntimeState:
+    ego_vehicle_speed_kph: float = 0.0
+    ego_vehicle_speed_source: str = "SIMULATED"
+    vehicle_speed_sim_enabled: bool = True
+    dms_speed_gate_state: str = "STARTUP_INITIALIZING"
+    dms_operational_mode: str = "STARTUP_INITIALIZING"
+    dms_alerts_enabled: bool = False
+    dms_alert_suppression_reason: str = "NONE"
+    dms_activation_threshold_kph: float = 30.0
+    dms_deactivation_threshold_kph: float = 28.0
+    vehicle_speed_reason_codes: list[str] = field(default_factory=list)
+    left_indicator_on: bool = False
+    right_indicator_on: bool = False
+    indicator_source: str = "SIMULATED"
+    indicator_reason_codes: list[str] = field(default_factory=list)
+    sanctioned_task_state: str = "NONE"
+    sanctioned_task_reason_codes: list[str] = field(default_factory=list)
+    hmi_banner_text: str = ""
+    hmi_alert_subtype: str = ""
+    hmi_primary_reason: str = ""
+    hmi_secondary_reason: str = ""
+    vehicle_monitor_line: str = ""
+    hmi_operational_reason: str = ""
+    time_to_activation_s: float = 0.0
+    critical_driver_unavailable_requested: bool = False
+    critical_unavailable_requires_no_face: bool = True
+    critical_unavailable_requires_no_body: bool = True
+    critical_unavailable_reason_codes: list[str] = field(default_factory=list)
+    live_output_fps_mode: str = "measured"
+    live_output_fps: float = 0.0
+    frame_capture_time_ms: float = 0.0
+    processing_time_ms: float = 0.0
+    frame_write_time_ms: float = 0.0
+    timing_reason_codes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -425,6 +473,7 @@ class DMSState:
     phone_use: PhoneUseState = field(default_factory=PhoneUseState)
     attention: AttentionOutput = field(default_factory=AttentionOutput)
     dms_v02: DMSV02DecisionState = field(default_factory=DMSV02DecisionState)
+    vehicle: VehicleRuntimeState = field(default_factory=VehicleRuntimeState)
     occupancy: OccupancyState = field(default_factory=OccupancyState)
     seatbelt_authenticity: SeatbeltAuthenticity = field(default_factory=SeatbeltAuthenticity)
     driver_readiness_score: DriverReadinessScore = field(default_factory=DriverReadinessScore)

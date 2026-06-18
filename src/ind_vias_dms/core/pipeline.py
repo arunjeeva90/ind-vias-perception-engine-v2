@@ -538,6 +538,20 @@ class DMSPipeline:
                 driver_track_held=proposal_only_driver_visible or driver_session_held,
             )
         )
+        head_yaw_label = _relative_angle_label(road_axis_pose.relative_yaw_deg, "L", "R")
+        head_pitch_label = _relative_angle_label(road_axis_pose.relative_pitch_deg, "U", "D")
+        head_roll_label = _relative_angle_label(road_axis_pose.relative_roll_deg, "L", "R")
+        status_head_angle_line = (
+            f"Yaw {head_yaw_label} | Pitch {head_pitch_label} | Roll {head_roll_label} | "
+            f"Vector {road_axis_pose.head_angle_from_road_deg:.0f} | Q {road_axis_pose.head_pose_vector_quality:.2f}"
+        )
+        status_head_raw_rel_line = (
+            f"raw {road_axis_pose.head_pose_raw_yaw_deg:.1f}/"
+            f"{road_axis_pose.head_pose_raw_pitch_deg:.1f}/{road_axis_pose.head_pose_raw_roll_deg:.1f} | "
+            f"rel {road_axis_pose.relative_yaw_deg:.1f}/"
+            f"{road_axis_pose.relative_pitch_deg:.1f}/{road_axis_pose.relative_roll_deg:.1f}"
+        )
+
         state = DMSState(
             timestamp_ms=timestamp_ms,
             frame_id=frame_id,
@@ -638,6 +652,12 @@ class DMSPipeline:
                 relative_roll_deg=road_axis_pose.relative_roll_deg,
                 head_angle_from_road_deg=road_axis_pose.head_angle_from_road_deg,
                 head_pose_vector_quality=road_axis_pose.head_pose_vector_quality,
+                head_yaw_relative_label=head_yaw_label,
+                head_pitch_relative_label=head_pitch_label,
+                head_roll_relative_label=head_roll_label,
+                status_head_angle_line=status_head_angle_line,
+                status_head_raw_rel_line=status_head_raw_rel_line,
+                head_angle_display_visible=True,
                 road_axis_calibration_source=road_axis_pose.road_axis_calibration_source,
                 road_axis_calibration_confidence=road_axis_pose.road_axis_calibration_confidence,
             ),
@@ -1612,3 +1632,12 @@ class DMSPipeline:
         else:
             risk = RiskLevel.CRITICAL
         return DriverReadinessScore(score, risk)
+
+
+def _relative_angle_label(value: float, negative_label: str, positive_label: str, limit: float = 90.0) -> str:
+    if abs(value) > limit:
+        return "CLAMPED"
+    if round(abs(value)) == 0:
+        return "0"
+    direction = positive_label if value >= 0 else negative_label
+    return f"{direction}{abs(value):02.0f}"

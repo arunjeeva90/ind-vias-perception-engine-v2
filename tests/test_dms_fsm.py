@@ -31,6 +31,7 @@ from ind_vias_dms.core.types import (
     PlaceholderState,
     PresenceState,
 )
+from ind_vias_dms.core.vehicle_state import VehicleStateManager
 from ind_vias_dms.temporal.attention_state import AttentionSignals, AttentionStateClassifier
 from ind_vias_dms.temporal.distraction_fsm import DistractionFSM
 from ind_vias_dms.temporal.drowsiness_fsm import DrowsinessFSM
@@ -51,6 +52,7 @@ from ind_vias_dms.visualization.overlay import (
     clamp_endpoint,
     occupant_label,
     status_dashboard_lines,
+    vehicle_monitor_lines,
 )
 
 
@@ -1589,6 +1591,41 @@ def test_v02_short_head_down_maps_to_monitor_not_warning():
     assert decision.final_banner == "DMS MONITOR"
 
 
+def test_v0242_head_down_candidate_degraded_availability_maps_to_monitor():
+    attention = DMSState().attention
+    attention.attention_substate = AttentionSubstate.HEAD_DOWN_CANDIDATE
+    attention.attention_reason_codes = ["HEAD_DOWN", "HEAD_DOWN_CANDIDATE"]
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    availability.reason_codes = ["HEAD_DOWN_CANDIDATE"]
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(attention=attention, availability=availability, driver_present=True)
+    )
+
+    assert decision.final_banner == "DMS MONITOR"
+    assert decision.final_level == DMSV02Level.MONITOR
+    assert decision.final_decision_path == "MONITOR > head_down_candidate"
+    assert "HEAD_DOWN_CANDIDATE_TO_MONITOR" in decision.reason_codes
+
+
+def test_v0242_behavior_candidate_only_degraded_availability_maps_to_monitor():
+    attention = DMSState().attention
+    attention.attention_substate = AttentionSubstate.PHONE_DOWN_CANDIDATE
+    attention.attention_reason_codes = ["POSSIBLE_PHONE_POSTURE_ACCUMULATING"]
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    availability.reason_codes = ["POSSIBLE_PHONE_POSTURE_ACCUMULATING"]
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(attention=attention, availability=availability, driver_present=True)
+    )
+
+    assert decision.final_banner == "DMS MONITOR"
+    assert decision.final_decision_path == "MONITOR > behavior_candidate_degraded"
+    assert "BEHAVIOR_CANDIDATE_TO_MONITOR" in decision.reason_codes
+
+
 def test_v02_sustained_head_down_maps_to_distraction_warning():
     attention = DMSState().attention
     attention.head_down_duration_ms = 1700
@@ -2052,7 +2089,8 @@ def test_v023_status_dashboard_includes_head_angle_line():
     assert "Yaw R42" in lines["Head angle"]
     assert "Pitch D02" in lines["Head angle"]
     assert "Vector 42" in lines["Head angle"]
-    assert "Quality" in lines["Head angle"]
+    assert "Q" in lines["Head angle"]
+    assert "Head raw/rel" in lines
     assert "raw yaw/pitch/roll" in lines["Head angle raw"]
     assert "road-relative yaw/pitch/roll" in lines["Head angle raw"]
     assert lines["Head vector quality"] == "0.00"
@@ -2212,6 +2250,148 @@ def test_degraded_entry_and_exit_hysteresis_reduce_frame_flicker():
     assert matrix.evaluate(_v02_inputs(timestamp_ms=260, health=low)).final_banner == "DMS DEGRADED"
     assert matrix.evaluate(_v02_inputs(timestamp_ms=400, health=high)).final_banner == "DMS DEGRADED"
     assert matrix.evaluate(_v02_inputs(timestamp_ms=1300, health=high)).final_banner == "NORMAL"
+
+
+def test_v0242_sensor_degraded_availability_still_maps_to_degraded():
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    availability.reason_codes = ["FACE_MESH_FAILED_ALL_RETRIES"]
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(
+            timestamp_ms=1000,
+            availability=availability,
+            driver_present=False,
+            driver_body_present=False,
+            no_face_duration_ms=1500,
+            driver_observability=DriverObservabilityState.UNOBSERVABLE_TEMP.value,
+        )
+    )
+
+    assert decision.final_banner == "DMS DEGRADED"
+    assert decision.final_decision_path == "DEGRADED > sensor_observation_degraded"
+    assert "DEGRADED_ALLOWED_SENSOR_UNRELIABLE" in decision.reason_codes
+
+
+def test_v0242_low_dms_confidence_still_maps_to_degraded():
+    health = DMSHealth(camera_status=CameraStatus.OK, eye_visibility_score=0.1)
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(_v02_inputs(timestamp_ms=1000, health=health))
+
+    assert decision.final_banner == "DMS DEGRADED"
+    assert decision.final_decision_path == "DEGRADED > low_dms_confidence"
+    assert "DEGRADED_ALLOWED_LOW_DMS_CONFIDENCE" in decision.reason_codes
+
+
+def test_v0242_startup_session_reset_suppresses_user_visible_degraded():
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    availability.reason_codes = ["DRIVER_SESSION_RESET", "ROAD_CALIBRATION_FILE_LOADED"]
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(timestamp_ms=0, availability=availability)
+    )
+
+    assert decision.final_banner == "DMS MONITOR"
+    assert decision.final_decision_path == "MONITOR > startup_initializing"
+    assert "STARTUP_DEGRADED_SUPPRESSED" in decision.reason_codes
+
+
+def test_v0243_startup_monitor_clears_after_stable_validated_road_driver():
+    matrix = DMSV02DecisionMatrix(DMSConfig(startup_clear_stable_ms=400, monitor_recovery_hold_ms=400))
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    availability.reason_codes = ["DRIVER_SESSION_RESET", "ROAD_CALIBRATION_FILE_LOADED"]
+    attention = DMSState().attention
+    attention.attention_state = AttentionState.NORMAL
+    attention.attention_substate = AttentionSubstate.ROAD
+    health = DMSHealth(
+        camera_status=CameraStatus.OK,
+        face_detection_status=CameraStatus.OK,
+        eye_visibility_score=0.85,
+        face_visibility_score=0.9,
+    )
+
+    first = matrix.evaluate(
+        _v02_inputs(
+            timestamp_ms=0,
+            health=health,
+            availability=availability,
+            attention=attention,
+            driver_present=True,
+            driver_observability=DriverObservabilityState.OBSERVABLE.value,
+        )
+    )
+    cleared = matrix.evaluate(
+        _v02_inputs(
+            timestamp_ms=500,
+            health=health,
+            availability=availability,
+            attention=attention,
+            driver_present=True,
+            driver_observability=DriverObservabilityState.OBSERVABLE.value,
+        )
+    )
+    later = matrix.evaluate(
+        _v02_inputs(
+            timestamp_ms=1200,
+            health=health,
+            availability=availability,
+            attention=attention,
+            driver_present=True,
+            driver_observability=DriverObservabilityState.OBSERVABLE.value,
+        )
+    )
+
+    assert first.final_banner == "DMS MONITOR"
+    assert first.final_decision_path == "MONITOR > startup_initializing"
+    assert cleared.final_banner == "NORMAL"
+    assert cleared.final_decision_path == "NORMAL > road/available"
+    assert later.final_banner == "NORMAL"
+    assert later.final_decision_path != "MONITOR > startup_initializing"
+
+
+def test_v0243_startup_initializing_does_not_hide_warning_distraction():
+    availability = DMSState().driver_availability
+    availability.state = AvailabilityState.DEGRADED
+    availability.reason_codes = ["DRIVER_SESSION_RESET"]
+    attention = DMSState().attention
+    attention.head_down_duration_ms = 1700
+    attention.attention_substate = AttentionSubstate.HEAD_DOWN_DISTRACTION
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(
+        _v02_inputs(
+            timestamp_ms=0,
+            availability=availability,
+            attention=attention,
+            driver_present=True,
+            driver_observability=DriverObservabilityState.OBSERVABLE.value,
+        )
+    )
+
+    assert decision.final_banner == "DISTRACTION WARNING"
+
+
+def test_v0243_monitor_recovers_to_normal_after_short_hold():
+    matrix = DMSV02DecisionMatrix(DMSConfig(monitor_recovery_hold_ms=400, min_banner_hold_ms=800))
+    attention = DMSState().attention
+    attention.gaze_offroad_duration_ms = 1600
+    monitor = matrix.evaluate(_v02_inputs(timestamp_ms=0, attention=attention))
+    early = matrix.evaluate(_v02_inputs(timestamp_ms=300))
+    recovered = matrix.evaluate(_v02_inputs(timestamp_ms=450))
+
+    assert monitor.final_banner == "DMS MONITOR"
+    assert early.final_banner == "DMS MONITOR"
+    assert recovered.final_banner == "NORMAL"
+
+
+def test_v0242_startup_camera_error_still_allows_degraded():
+    health = DMSHealth(camera_status=CameraStatus.ERROR, eye_visibility_score=0.0)
+
+    decision = DMSV02DecisionMatrix(DMSConfig()).evaluate(_v02_inputs(timestamp_ms=0, health=health))
+
+    assert decision.final_banner == "DMS DEGRADED"
+    assert decision.final_decision_path == "DEGRADED > low_dms_confidence"
 
 
 def test_degraded_recovery_clears_immediately_when_driver_observation_is_strong():
@@ -2572,7 +2752,25 @@ def test_v0241_status_dashboard_uses_human_readable_head_angle_line():
 
     lines = dict(status_dashboard_lines(state, fps=30.0))
 
-    assert lines["Head angle"] == "Yaw L12 | Pitch D04 | Roll L02 | Vector 13 | Quality 0.85"
+    assert lines["Head angle"] == "Yaw L12 | Pitch D04 | Roll L02 | Vector 13 | Q 0.85"
+
+
+def test_v0242_head_angle_labels_are_serialized():
+    state = DMSState()
+    state.gaze.head_yaw_relative_label = "R12"
+    state.gaze.head_pitch_relative_label = "D04"
+    state.gaze.head_roll_relative_label = "L02"
+    state.gaze.status_head_angle_line = "Yaw R12 | Pitch D04 | Roll L02 | Vector 13 | Q 0.85"
+    state.gaze.status_head_raw_rel_line = "raw 16.4/9.4/-2.5 | rel 12.0/4.0/-2.0"
+    state.gaze.head_angle_display_visible = True
+
+    payload = state.to_dict()
+
+    assert payload["gaze"]["head_yaw_relative_label"] == "R12"
+    assert payload["gaze"]["head_pitch_relative_label"] == "D04"
+    assert payload["gaze"]["head_roll_relative_label"] == "L02"
+    assert payload["gaze"]["status_head_angle_line"].startswith("Yaw R12")
+    assert payload["gaze"]["head_angle_display_visible"] is True
 
 
 def test_v0241_cli_parser_accepts_start_and_end_ms():
@@ -2589,3 +2787,126 @@ def test_v0241_cli_parser_accepts_start_and_end_ms():
 
     assert args.start_ms == 17000
     assert args.end_ms == 23500
+def _validated_road_state_v0244(timestamp_ms: int = 0) -> DMSState:
+    state = DMSState(timestamp_ms=timestamp_ms)
+    state.driver_presence.state = PresenceState.PRESENT
+    state.driver_observability.state = DriverObservabilityState.OBSERVABLE
+    state.driver_availability.state = AvailabilityState.AVAILABLE
+    state.dms_health.camera_status = CameraStatus.OK
+    state.dms_health.face_detection_status = CameraStatus.OK
+    state.dms_health.face_visibility_score = 0.95
+    state.dms_health.eye_visibility_score = 0.9
+    state.attention.attention_state = AttentionState.NORMAL
+    state.attention.attention_substate = AttentionSubstate.ROAD
+    state.attention.pose_reliable = True
+    state.drowsiness.effective_eye_state = "OPEN"
+    state.dms_v02.final_level = DMSV02Level.NORMAL
+    state.dms_v02.final_banner = "NORMAL"
+    state.dms_v02.final_decision_path = "NORMAL > road/available"
+    return state
+
+
+def test_v0244_startup_and_low_speed_gate_suppresses_alerts_with_standby_hmi():
+    manager = VehicleStateManager(
+        DMSConfig(
+            vehicle_speed_initial_kph=0.0,
+            vehicle_speed_startup_ramp_ms=3000,
+            dms_activation_speed_kph=30.0,
+        )
+    )
+
+    startup = manager.update(_validated_road_state_v0244(0), timestamp_ms=0)
+    standby = manager.update(_validated_road_state_v0244(3500), timestamp_ms=3500)
+
+    assert startup.vehicle.dms_operational_mode == "STARTUP_INITIALIZING"
+    assert startup.vehicle.dms_alerts_enabled is False
+    assert startup.dms_v02.hmi_banner_text.startswith("DMS STANDBY")
+    assert standby.vehicle.dms_operational_mode == "STANDBY"
+    assert standby.vehicle.dms_alerts_enabled is False
+    assert "Speed below 30" in standby.dms_v02.hmi_banner_text
+
+
+def test_v0244_speed_activation_and_deactivation_hysteresis():
+    manager = VehicleStateManager(
+        DMSConfig(
+            vehicle_speed_startup_ramp_enabled=False,
+            vehicle_speed_initial_kph=0.0,
+            dms_activation_speed_kph=30.0,
+            dms_deactivation_speed_kph=28.0,
+            dms_activation_banner_ms=100,
+        )
+    )
+
+    manager.speed_kph = 31.0
+    activated = manager.update(_validated_road_state_v0244(1000), timestamp_ms=1000)
+    active = manager.update(_validated_road_state_v0244(1200), timestamp_ms=1200)
+    manager.speed_kph = 27.0
+    standby = manager.update(_validated_road_state_v0244(1300), timestamp_ms=1300)
+
+    assert activated.vehicle.dms_operational_mode == "DMS_ACTIVATED"
+    assert active.vehicle.dms_operational_mode == "DMS_ACTIVE_MONITORING"
+    assert standby.vehicle.dms_operational_mode == "STANDBY"
+
+
+def test_v0244_matching_indicator_short_side_glance_suppresses_warning():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    manager.toggle_right_indicator()
+    state = _validated_road_state_v0244(1000)
+    state.gaze.relative_yaw_deg = 45.0
+    state.attention.side_glance_duration_ms = 900
+    state.attention.attention_substate = AttentionSubstate.SIDE_GLANCE_RIGHT
+    state.dms_v02.final_level = DMSV02Level.WARNING
+    state.dms_v02.final_banner = "DISTRACTION WARNING"
+    state.dms_v02.final_decision_path = "WARNING > VISUAL"
+
+    updated = manager.update(state, timestamp_ms=1000)
+
+    assert updated.vehicle.sanctioned_task_state == "RIGHT_MIRROR_CHECK_ALLOWED"
+    assert updated.dms_v02.final_banner == "NORMAL"
+    assert "MIRROR_CHECK_ALLOWED" in updated.vehicle.sanctioned_task_reason_codes
+
+
+def test_v0244_mirror_check_does_not_suppress_phone_or_drowsy_warning():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    manager.toggle_left_indicator()
+    state = _validated_road_state_v0244(1000)
+    state.gaze.relative_yaw_deg = -45.0
+    state.attention.side_glance_duration_ms = 900
+    state.phone_use.driver_state = "PHONE_TO_EAR_SUSPECTED"
+    state.dms_v02.final_level = DMSV02Level.WARNING
+    state.dms_v02.final_banner = "DISTRACTION WARNING"
+    state.dms_v02.final_decision_path = "WARNING > PHONE_SUSPECTED"
+
+    updated = manager.update(state, timestamp_ms=1000)
+
+    assert updated.vehicle.sanctioned_task_state == "NONE"
+    assert updated.dms_v02.final_banner == "DISTRACTION WARNING"
+
+
+def test_v0244_status_and_vehicle_monitor_include_vehicle_gate_lines():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    state = manager.update(_validated_road_state_v0244(1000), timestamp_ms=1000, live_output_fps=29.8)
+
+    status = dict(status_dashboard_lines(state, fps=30.0))
+    vehicle = dict(vehicle_monitor_lines(state))
+
+    assert "Vehicle gate" in status
+    assert "Vehicle speed" in status
+    assert "HMI banner" in status
+    assert vehicle["Speed"].startswith("35.0 km/h")
+    assert vehicle["Timing"].startswith("fps=29.8")
+
+
+def test_v0244_vehicle_fields_are_serialized():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    state = manager.update(_validated_road_state_v0244(1000), timestamp_ms=1000, live_output_fps=30.0)
+
+    payload = state.to_dict()
+
+    assert payload["vehicle"]["ego_vehicle_speed_kph"] == 35.0
+    assert payload["vehicle"]["dms_speed_gate_state"] in {"DMS_ACTIVATED", "DMS_ACTIVE_MONITORING"}
+    assert payload["dms_v02"]["hmi_banner_text"]

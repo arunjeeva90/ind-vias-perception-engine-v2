@@ -87,6 +87,9 @@ class LearningMemoryWriter:
         return (
             state.dms_v02.final_banner != "NORMAL"
             or state.phone_use.driver_state not in {"NO_PHONE", "UNKNOWN"}
+            or state.vehicle.sanctioned_task_state != "NONE"
+            or state.vehicle.dms_alert_suppression_reason
+            in {"STANDBY", "STARTUP_INITIALIZING"}
             or state.attention.attention_substate.value
             in {"FACE_LOST", "SIDE_PROFILE_TRACKED", "SIDE_PROFILE_ATTENTION_LOSS"}
         )
@@ -98,7 +101,13 @@ class LearningMemoryWriter:
             + state.dms_v02.reason_codes
             + state.attention.attention_reason_codes
             + state.phone_use.reason_codes
+            + state.vehicle.vehicle_speed_reason_codes
+            + state.vehicle.sanctioned_task_reason_codes
         )
+        if "MIRROR_CHECK_ALLOWED" in reasons:
+            return "INDICATOR_SANCTIONED_MIRROR_CHECK"
+        if state.vehicle.dms_alert_suppression_reason in {"STANDBY", "STARTUP_INITIALIZING"}:
+            return "DMS_ALERT_SUPPRESSED_SPEED_GATE"
         if state.dms_v02.final_banner == "DMS DEGRADED" and state.attention.attention_substate.value.startswith("SIDE"):
             return "SIDE_PROFILE_FALSE_DEGRADED"
         if state.dms_v02.final_banner == "DMS DEGRADED" and state.attention.yaw_classifiable:
