@@ -137,6 +137,27 @@ class OverlayRenderer:
             y += 20
         return canvas
 
+    def render_vehicle_monitor(self, state: DMSState, width: int = 520, height: int = 260) -> np.ndarray:
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        canvas[:] = (20, 22, 24)
+        cv2.rectangle(canvas, (0, 0), (width, 48), (80, 120, 140), -1)
+        cv2.putText(
+            canvas,
+            "IND-VIAS Vehicle Monitor",
+            (18, 32),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.75,
+            BLACK,
+            2,
+        )
+        rows = vehicle_monitor_lines(state)
+        y = 70
+        for label, value in rows:
+            cv2.putText(canvas, label, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.44, GRAY, 1)
+            cv2.putText(canvas, value[:42], (168, y), cv2.FONT_HERSHEY_SIMPLEX, 0.46, WHITE, 1)
+            y += 24
+        return canvas
+
     def _draw_occupant_boxes(
         self,
         frame: np.ndarray,
@@ -292,20 +313,23 @@ class OverlayRenderer:
 def banner_decision(state: DMSState) -> tuple[str, object]:
         if state.dms_v02.final_banner and state.dms_v02.final_decision_path:
             banner = state.dms_v02.final_banner
+            label = state.dms_v02.hmi_banner_text or banner
+            if state.vehicle.dms_operational_mode in {"STARTUP_INITIALIZING", "STANDBY"}:
+                return label, DistractionLevel.LOW
             if banner == "NORMAL":
-                return banner, AvailabilityState.AVAILABLE
+                return label, AvailabilityState.AVAILABLE
             if banner == "DMS MONITOR":
-                return banner, DistractionLevel.LOW
+                return label, DistractionLevel.LOW
             if banner == "DMS DEGRADED":
-                return banner, AvailabilityState.DEGRADED
+                return label, AvailabilityState.DEGRADED
             if banner == "DISTRACTION WARNING":
-                return banner, DistractionLevel.MEDIUM
+                return label, DistractionLevel.MEDIUM
             if banner == "DROWSINESS WARNING":
-                return banner, DrowsinessLevel.MEDIUM
+                return label, DrowsinessLevel.MEDIUM
             if banner == "DANGER":
-                return banner, DrowsinessLevel.HIGH
+                return label, DrowsinessLevel.HIGH
             if banner == "DRIVER UNAVAILABLE":
-                return banner, AvailabilityState.UNAVAILABLE
+                return label, AvailabilityState.UNAVAILABLE
         label = "NORMAL"
         status = AvailabilityState.AVAILABLE
         if state.driver_availability.state == AvailabilityState.UNAVAILABLE:
@@ -364,6 +388,30 @@ def status_dashboard_lines(
         ("Driver face state", state.driver_identity.driver_face_state),
         ("Proposal state", state.driver_identity.face_proposal_state),
         ("Track hold", state.driver_identity.driver_track_hold_state),
+        ("Vehicle gate", state.vehicle.dms_speed_gate_state),
+        ("Vehicle speed", f"{state.vehicle.ego_vehicle_speed_kph:.1f} km/h"),
+        (
+            "Indicators",
+            f"L={'ON' if state.vehicle.left_indicator_on else 'OFF'} "
+            f"R={'ON' if state.vehicle.right_indicator_on else 'OFF'}",
+        ),
+        ("HMI banner", state.dms_v02.hmi_banner_text or state.dms_v02.final_banner),
+        (
+            "Head angle",
+            "Yaw "
+            f"{_angle_label(state.gaze.relative_yaw_deg, 'L', 'R')} | Pitch "
+            f"{_angle_label(state.gaze.relative_pitch_deg, 'U', 'D')} | Roll "
+            f"{_angle_label(state.gaze.relative_roll_deg, 'L', 'R')} | Vector "
+            f"{state.gaze.head_angle_from_road_deg:.0f} | Q "
+            f"{state.gaze.head_pose_vector_quality:.2f}",
+        ),
+        (
+            "Head raw/rel",
+            f"raw {state.gaze.head_pose_raw_yaw_deg:.1f}/"
+            f"{state.gaze.head_pose_raw_pitch_deg:.1f}/{state.gaze.head_pose_raw_roll_deg:.1f} | "
+            f"rel {state.gaze.relative_yaw_deg:.1f}/"
+            f"{state.gaze.relative_pitch_deg:.1f}/{state.gaze.relative_roll_deg:.1f}",
+        ),
         ("Observability", state.driver_observability.state.value),
         ("Obs reason", ",".join(state.driver_observability.reason_codes) or "NONE"),
         ("Raw eyes", state.drowsiness.raw_eye_state),
@@ -459,15 +507,6 @@ def status_dashboard_lines(
             f"{state.gaze.head_pitch_deg:.1f} / {state.gaze.head_roll_deg:.1f}",
         ),
         (
-            "Head angle",
-            "Yaw "
-            f"{_angle_label(state.gaze.relative_yaw_deg, 'L', 'R')} | Pitch "
-            f"{_angle_label(state.gaze.relative_pitch_deg, 'U', 'D')} | Roll "
-            f"{_angle_label(state.gaze.relative_roll_deg, 'L', 'R')} | Vector "
-            f"{state.gaze.head_angle_from_road_deg:.0f} | Quality "
-            f"{state.gaze.head_pose_vector_quality:.2f}",
-        ),
-        (
             "Head angle raw",
             f"raw yaw/pitch/roll = {state.gaze.head_pose_raw_yaw_deg:.1f}/"
             f"{state.gaze.head_pose_raw_pitch_deg:.1f}/{state.gaze.head_pose_raw_roll_deg:.1f} deg | "
@@ -490,9 +529,26 @@ def status_dashboard_lines(
     ]
 
 
+def vehicle_monitor_lines(state: DMSState) -> list[tuple[str, str]]:
+    return [
+        ("Speed", f"{state.vehicle.ego_vehicle_speed_kph:.1f} km/h ({state.vehicle.ego_vehicle_speed_source})"),
+        ("Gate", state.vehicle.dms_speed_gate_state),
+        ("Alerts", "ENABLED" if state.vehicle.dms_alerts_enabled else "SUPPRESSED"),
+        ("Suppress reason", state.vehicle.dms_alert_suppression_reason),
+        ("Indicators", f"L={'ON' if state.vehicle.left_indicator_on else 'OFF'} R={'ON' if state.vehicle.right_indicator_on else 'OFF'}"),
+        ("Sanctioned task", state.vehicle.sanctioned_task_state),
+        ("Vehicle reason", ",".join(state.vehicle.vehicle_speed_reason_codes) or "NONE"),
+        ("Indicator reason", ",".join(state.vehicle.indicator_reason_codes) or "NONE"),
+        ("HMI", state.vehicle.hmi_banner_text or state.dms_v02.final_banner),
+        ("Timing", f"fps={state.vehicle.live_output_fps:.1f} proc={state.vehicle.processing_time_ms:.1f}ms"),
+    ]
+
+
 def _angle_label(value: float, negative_label: str, positive_label: str, limit: float = 90.0) -> str:
     if abs(value) > limit:
         return "POSE_OUT_OF_HUMAN_RANGE"
+    if round(abs(value)) == 0:
+        return "0"
     direction = positive_label if value >= 0 else negative_label
     return f"{direction}{abs(value):02.0f}"
 

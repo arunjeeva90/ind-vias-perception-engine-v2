@@ -44,14 +44,30 @@ class DMSV02DecisionMatrix:
         self._last_level: DMSV02Level | None = None
         self._last_path: str = ""
         self._last_change_ms: int | None = None
+        self._first_timestamp_ms: int | None = None
+        self._startup_clear_since_ms: int | None = None
+        self._startup_completed: bool = False
         self._degraded_candidate_since_ms: int | None = None
         self._degraded_recovery_since_ms: int | None = None
 
     def evaluate(self, inputs: DMSV02Inputs) -> DMSV02DecisionState:
+        if self._first_timestamp_ms is None:
+            self._first_timestamp_ms = inputs.timestamp_ms
         confidence_state = self._confidence(inputs)
         drowsiness_state = self._drowsiness_state(inputs)
         distraction_state = self._distraction_state(inputs)
         availability_state = self._availability_state(inputs, drowsiness_state)
+        startup_reason_active_raw = self._startup_reason_active(inputs)
+        startup_cleared = self._startup_clear_ready(inputs)
+        if startup_cleared:
+            self._startup_completed = True
+        startup_reason_active = startup_reason_active_raw and not self._startup_completed
+        if (
+            (startup_cleared or (self._startup_completed and startup_reason_active_raw))
+            and availability_state == "DEGRADED"
+            and not self._sensor_observation_degraded(inputs, confidence_state)
+        ):
+            availability_state = "AVAILABLE"
         raw_observation_codes = self._raw_observation_codes(inputs)
         reasons = list(
             dict.fromkeys(
@@ -88,26 +104,49 @@ class DMSV02DecisionMatrix:
             level = DMSV02Level.WARNING
             banner = "DROWSINESS WARNING"
             path = "WARNING > DROWSINESS"
+        elif startup_reason_active and not startup_cleared and not self._sensor_observation_degraded(inputs, confidence_state):
+            level = DMSV02Level.MONITOR
+            banner = self.config.startup_init_banner or "DMS MONITOR"
+            path = "MONITOR > startup_initializing"
         elif self._monitor_distraction(inputs):
             level = DMSV02Level.MONITOR
             banner = "DMS MONITOR"
             path = f"MONITOR > {distraction_state}"
-        elif availability_state == "DEGRADED" and (inputs.driver_proposal_visible or inputs.driver_track_held):
+        elif availability_state == "DEGRADED" and self._should_degraded_availability_be_monitor(
+            inputs,
+            confidence_state,
+        ):
             level = DMSV02Level.MONITOR
             banner = "DMS MONITOR"
-            path = "MONITOR > proposal_visible_or_track_held"
+            if self._behavior_candidate_degraded(inputs):
+                path = (
+                    "MONITOR > head_down_candidate"
+                    if inputs.attention.attention_substate == AttentionSubstate.HEAD_DOWN_CANDIDATE
+                    else "MONITOR > behavior_candidate_degraded"
+                )
+            else:
+                path = "MONITOR > proposal_visible_or_track_held"
         elif availability_state == "DEGRADED":
             level = DMSV02Level.DEGRADED
             banner = "DMS DEGRADED"
-            path = "DEGRADED > availability_degraded"
+            path = (
+                "DEGRADED > sensor_observation_degraded"
+                if self._sensor_observation_degraded(inputs, confidence_state)
+                else "DEGRADED > availability_degraded"
+            )
         elif confidence_state in {DMSConfidenceState.LOW, DMSConfidenceState.UNAVAILABLE}:
             level = DMSV02Level.DEGRADED
             banner = "DMS DEGRADED"
-            path = "DEGRADED > observation_quality"
+            path = "DEGRADED > low_dms_confidence"
         elif self._normal_blocked(inputs):
             level = DMSV02Level.MONITOR
             banner = "DMS MONITOR"
             path = "MONITOR > active_attention_evidence"
+
+        if self._startup_degraded_suppressed(inputs, banner, startup_cleared):
+            level = DMSV02Level.MONITOR
+            banner = self.config.startup_init_banner or "DMS MONITOR"
+            path = "MONITOR > startup_initializing"
 
         level, banner, path = self._apply_banner_hysteresis(inputs.timestamp_ms, level, banner, path, inputs)
         reasons = self._sanitize_reasons(reasons, banner, inputs, path)
@@ -138,6 +177,140 @@ class DMSV02DecisionMatrix:
         if inputs.attention.pose_reliable is False or inputs.attention.attention_confidence < 0.35:
             return DMSConfidenceState.MEDIUM
         return DMSConfidenceState.HIGH
+
+    def _startup_degraded_suppressed(self, inputs: DMSV02Inputs, banner: str, startup_cleared: bool) -> bool:
+        if banner != "DMS DEGRADED":
+            return False
+        if startup_cleared:
+            return False
+        startup_base_ms = self._first_timestamp_ms if self._first_timestamp_ms is not None else inputs.timestamp_ms
+        startup_elapsed_ms = inputs.timestamp_ms - startup_base_ms
+        if startup_elapsed_ms > self.config.startup_init_suppress_degraded_ms:
+            return False
+        if inputs.health.camera_status.value == "ERROR":
+            return not self.config.startup_allow_degraded_on_camera_error
+        if not self._startup_reason_active(inputs):
+            return False
+        return True
+
+    def _startup_reason_active(self, inputs: DMSV02Inputs) -> bool:
+        startup_reasons = {
+            "DRIVER_SESSION_RESET",
+            "ROAD_GAZE_NOT_CALIBRATED",
+            "ROAD_CALIBRATION_FILE_LOADED",
+            "STARTUP_CALIBRATION_LOADING",
+        }
+        active_reasons = set(inputs.availability.reason_codes) | set(inputs.attention.attention_reason_codes)
+        return bool(active_reasons & startup_reasons)
+
+    def _startup_clear_ready(self, inputs: DMSV02Inputs) -> bool:
+        if self._startup_completed:
+            return True
+        if not self._startup_clear_candidate(inputs):
+            self._startup_clear_since_ms = None
+            return False
+        if self._startup_clear_since_ms is None:
+            self._startup_clear_since_ms = inputs.timestamp_ms
+        return inputs.timestamp_ms - self._startup_clear_since_ms >= self.config.startup_clear_stable_ms
+
+    def _startup_clear_candidate(self, inputs: DMSV02Inputs) -> bool:
+        return (
+            inputs.driver_present
+            and inputs.driver_observability == "OBSERVABLE"
+            and inputs.health.camera_status.value == "OK"
+            and inputs.health.face_detection_status.value == "OK"
+            and inputs.health.face_visibility_score >= 0.75
+            and inputs.health.eye_visibility_score >= self.config.eye_visibility_min_confidence
+            and inputs.attention.attention_state.value == "NORMAL"
+            and inputs.attention.attention_substate == AttentionSubstate.ROAD
+            and inputs.attention.pose_reliable
+            and inputs.attention.head_down_duration_ms == 0
+            and inputs.attention.gaze_offroad_duration_ms == 0
+            and inputs.attention.phone_down_candidate_duration_ms == 0
+            and inputs.attention.phone_texting_candidate_duration_ms == 0
+            and inputs.attention.side_glance_duration_ms == 0
+        )
+
+    def _should_degraded_availability_be_monitor(
+        self,
+        inputs: DMSV02Inputs,
+        confidence_state: DMSConfidenceState,
+    ) -> bool:
+        if inputs.driver_proposal_visible or inputs.driver_track_held:
+            return True
+        return self._behavior_candidate_degraded(inputs) and not self._sensor_observation_degraded(
+            inputs,
+            confidence_state,
+        )
+
+    def _behavior_candidate_degraded(self, inputs: DMSV02Inputs) -> bool:
+        behavior_reasons = {
+            "HEAD_DOWN_CANDIDATE",
+            "SHORT_GLANCE_AWAY",
+            "SIDE_GLANCE_MONITOR",
+            "PHONE_TO_EAR_CANDIDATE",
+            "SELF_TOUCH_TRANSIENT",
+            "EAR_SCRATCH_GESTURE",
+            "FACE_TOUCH_GROOMING",
+            "POSSIBLE_PHONE_POSTURE_ACCUMULATING",
+            "LOW_HEAD_MOTION_DROWSINESS_SUPPORT_ONLY",
+        }
+        active_reasons = set(inputs.availability.reason_codes) | set(inputs.attention.attention_reason_codes)
+        return (
+            inputs.attention.attention_substate
+            in {
+                AttentionSubstate.HEAD_DOWN_CANDIDATE,
+                AttentionSubstate.PHONE_DOWN_CANDIDATE,
+                AttentionSubstate.SIDE_GLANCE_LEFT,
+                AttentionSubstate.SIDE_GLANCE_RIGHT,
+                AttentionSubstate.SIDE_PROFILE_RECOVERY,
+            }
+            or bool(active_reasons & behavior_reasons)
+            or (
+                0 < inputs.attention.head_down_duration_ms < self.config.head_down_warning_ms
+                and inputs.driver_present
+            )
+            or (
+                0 < inputs.attention.gaze_offroad_duration_ms < self.config.single_offroad_glance_warning_ms
+                and inputs.driver_present
+            )
+        )
+
+    def _sensor_observation_degraded(
+        self,
+        inputs: DMSV02Inputs,
+        confidence_state: DMSConfidenceState,
+    ) -> bool:
+        if confidence_state in {DMSConfidenceState.LOW, DMSConfidenceState.UNAVAILABLE}:
+            return True
+        if inputs.health.camera_status.value == "ERROR":
+            return True
+        sensor_reasons = {
+            "CAMERA_ERROR",
+            "CAMERA_BLOCKED",
+            "FRAME_INVALID",
+            "FACE_MESH_FAILED_ALL_RETRIES",
+            "WEBCAM_HOLD_EXPIRED",
+            "ROAD_FACING_HOLD_EXPIRED",
+            "DEGRADED_ALLOWED_TRUE_OBSERVATION_FAILURE",
+            "DEGRADED_ACTIVE_OBSERVATION_FAILURE",
+            "LOW_EYE_VISIBILITY",
+            "HEAD_POSE_UNRELIABLE",
+            "FACE_LOST",
+            "DRIVER_FACE_NOT_VISIBLE",
+            "DRIVER_FACE_LOST_TEMP",
+            "PERCLOS_PAUSED_FACE_LOST",
+            "PERCLOS_PAUSED_EYE_UNKNOWN",
+        }
+        active_reasons = set(inputs.availability.reason_codes) | set(inputs.attention.attention_reason_codes)
+        support_present = inputs.driver_present or inputs.driver_body_present or inputs.driver_proposal_visible or inputs.driver_track_held
+        if active_reasons & sensor_reasons and not self._behavior_candidate_degraded(inputs):
+            return True
+        if inputs.driver_observability in {"UNOBSERVABLE_TEMP", "UNOBSERVABLE_LONG"} and not support_present:
+            return True
+        if not inputs.driver_present and not support_present and inputs.no_face_duration_ms >= self.config.no_face_degraded_ms:
+            return True
+        return False
 
     def _drowsiness_state(self, inputs: DMSV02Inputs) -> str:
         if inputs.drowsiness.level == DrowsinessLevel.MICROSLEEP and self._valid_microsleep_evidence(inputs):
@@ -257,7 +430,8 @@ class DMSV02DecisionMatrix:
                 self._degraded_candidate_since_ms = None
             return level, banner, path
 
-        elapsed_ms = timestamp_ms - (self._last_change_ms or timestamp_ms)
+        last_change_ms = self._last_change_ms if self._last_change_ms is not None else timestamp_ms
+        elapsed_ms = timestamp_ms - last_change_ms
         normal_blocked_now = self._last_banner == "NORMAL" and self._normal_blocked(inputs)
         if banner == "DMS DEGRADED" and self._last_banner in {"NORMAL", "DMS MONITOR"}:
             if self._degraded_candidate_since_ms is None:
@@ -273,6 +447,11 @@ class DMSV02DecisionMatrix:
             self._degraded_candidate_since_ms = None
             critical_escalation = banner in {"DRIVER UNAVAILABLE", "DANGER", "DISTRACTION WARNING", "DROWSINESS WARNING"}
             critical_escalation = critical_escalation or normal_blocked_now
+            critical_escalation = critical_escalation or (
+                self._last_path == "MONITOR > startup_initializing"
+                and banner == "NORMAL"
+                and self._startup_clear_candidate(inputs)
+            )
 
         if self._last_banner == "DMS DEGRADED" and banner in {"NORMAL", "DMS MONITOR"}:
             if self._observation_strongly_recovered(inputs, banner):
@@ -293,7 +472,8 @@ class DMSV02DecisionMatrix:
         else:
             self._degraded_recovery_since_ms = None
 
-        if not critical_escalation and elapsed_ms < self.config.min_banner_hold_ms:
+        hold_ms = self.config.monitor_recovery_hold_ms if self._last_banner == "DMS MONITOR" else self.config.min_banner_hold_ms
+        if not critical_escalation and elapsed_ms < hold_ms:
             return self._last_level or level, self._last_banner, self._last_path
         self._set_banner(timestamp_ms, level, banner, path)
         return level, banner, path
@@ -352,6 +532,22 @@ class DMSV02DecisionMatrix:
             cleaned.append("LOW_HEAD_MOTION_DROWSINESS_SUPPORT_ONLY")
         if "RECOVERY_HOLD" in path:
             cleaned.extend(["DEGRADED_RECOVERY_HOLD", "OBSERVATION_RECOVERY_WAIT"])
+        if "startup_initializing" in path:
+            cleaned.extend(["STARTUP_INITIALIZING", "STARTUP_DEGRADED_SUPPRESSED"])
+        if "behavior_candidate_degraded" in path:
+            cleaned.extend(["DEGRADED_BLOCKED_BEHAVIOR_CANDIDATE_ONLY", "BEHAVIOR_CANDIDATE_TO_MONITOR"])
+        if "head_down_candidate" in path:
+            cleaned.extend(
+                [
+                    "DEGRADED_BLOCKED_BEHAVIOR_CANDIDATE_ONLY",
+                    "BEHAVIOR_CANDIDATE_TO_MONITOR",
+                    "HEAD_DOWN_CANDIDATE_TO_MONITOR",
+                ]
+            )
+        if "sensor_observation_degraded" in path:
+            cleaned.extend(["DEGRADED_REQUIRES_SENSOR_UNRELIABLE", "DEGRADED_ALLOWED_SENSOR_UNRELIABLE"])
+        if "low_dms_confidence" in path:
+            cleaned.extend(["DEGRADED_REQUIRES_SENSOR_UNRELIABLE", "DEGRADED_ALLOWED_LOW_DMS_CONFIDENCE"])
         if banner == "NORMAL":
             cleaned = [reason for reason in cleaned if reason not in stale_normal_reasons]
             cleaned.append("ROAD_GAZE_CONFIRMED")
