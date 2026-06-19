@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 
 from ind_vias_dms.core.config import DMSConfig
@@ -14,8 +16,9 @@ from ind_vias_dms.core.types import (
     DMSState,
 )
 from ind_vias_dms.temporal.cabin_evidence_fusion import CabinEvidenceFusion
+from ind_vias_dms.utils.debug_trace import DebugTraceRecorder
 from ind_vias_dms.vision.cabin_object_detection import CabinObjectDetector
-from ind_vias_dms.visualization.overlay import banner_decision
+from ind_vias_dms.visualization.overlay import banner_decision, status_dashboard_lines
 
 
 def _phone(timestamp_ms: int = 0) -> CabinEvidenceObject:
@@ -115,3 +118,46 @@ def test_smoking_candidate_does_not_create_warning():
     label, _ = banner_decision(state)
 
     assert label == "NORMAL"
+
+
+def test_dummy_cabin_evidence_does_not_emit_repeated_phone_cleared_events(tmp_path):
+    event_path = tmp_path / "events.json"
+    recorder = DebugTraceRecorder(event_json_path=str(event_path))
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    for frame_id in range(100):
+        state = DMSState(frame_id=frame_id, timestamp_ms=frame_id * 33)
+        recorder.write_frame(state, {}, frame)
+    recorder.close()
+
+    events = json.loads(event_path.read_text(encoding="utf-8"))
+    cabin_events = [event for event in events if event.get("cabin_event_type")]
+
+    assert cabin_events == []
+
+
+def test_phone_candidate_cleared_event_emits_once(tmp_path):
+    event_path = tmp_path / "events.json"
+    recorder = DebugTraceRecorder(event_json_path=str(event_path))
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    candidate = DMSState(frame_id=1, timestamp_ms=100)
+    candidate.cabin_evidence.phone_state = CabinPhoneState.PHONE_OBJECT_CANDIDATE
+    cleared = DMSState(frame_id=2, timestamp_ms=200)
+
+    recorder.write_frame(candidate, {}, frame)
+    recorder.write_frame(cleared, {}, frame)
+    recorder.write_frame(DMSState(frame_id=3, timestamp_ms=300), {}, frame)
+    recorder.close()
+
+    events = json.loads(event_path.read_text(encoding="utf-8"))
+    cabin_events = [event.get("cabin_event_type") for event in events if event.get("cabin_event_type")]
+
+    assert cabin_events == ["CABIN_PHONE_CANDIDATE_STARTED", "CABIN_PHONE_CLEARED"]
+
+
+def test_status_dashboard_shows_compact_cabin_evidence_near_vehicle_context():
+    labels = [label for label, _ in status_dashboard_lines(DMSState(), fps=30.0)]
+
+    assert labels.index("Cabin phone") < labels.index("HMI banner")
+    assert labels.index("Cabin belt") < labels.index("HMI banner")
+    assert labels.index("Cabin smoking") < labels.index("HMI banner")
+    assert labels.index("Cabin affect") < labels.index("HMI banner")

@@ -141,49 +141,104 @@ class VehicleStateManager:
         return ["INDICATORS_OFF"]
 
     def _apply_indicator_mirror_arbitration(self, state: DMSState, vehicle: VehicleRuntimeState) -> None:
-        yaw = state.gaze.relative_yaw_deg
-        pitch = abs(state.gaze.relative_pitch_deg)
-        matching_left = vehicle.left_indicator_on and yaw < -self.config.side_glance_monitor_deg
-        matching_right = vehicle.right_indicator_on and yaw > self.config.side_glance_monitor_deg
-        matching_indicator = matching_left or matching_right
+        eligible, side = self._sanctioned_mirror_check_eligible(state, vehicle)
+        if not eligible:
+            return
         side_glance_ms = state.attention.side_glance_duration_ms
-        no_phone_or_drowsy = (
-            state.dms_v02.final_banner not in {"DROWSINESS WARNING", "DANGER", "DRIVER UNAVAILABLE"}
-            and state.phone_use.driver_state
-            not in {"PHONE_TO_EAR_SUSPECTED", "PHONE_TO_EAR_CONFIRMED", "PHONE_CONFIRMED"}
+        vehicle.sanctioned_task_state = f"{side}_MIRROR_CHECK_ALLOWED"
+        vehicle.sanctioned_task_reason_codes = [
+            "INDICATOR_MATCHES_SIDE_GLANCE",
+            "MIRROR_CHECK_ALLOWED",
+            "DISTRACTION_WARNING_SUPPRESSED_MIRROR_CHECK",
+        ]
+        state.dms_v02.final_banner = "NORMAL"
+        state.dms_v02.final_level = DMSV02Level.NORMAL
+        state.dms_v02.final_decision_path = "NORMAL > sanctioned_mirror_check"
+        if side_glance_ms > self.config.sanctioned_mirror_max_ms:
+            vehicle.sanctioned_task_state = f"{side}_MIRROR_CHECK_EXCEEDED"
+            vehicle.sanctioned_task_reason_codes = [
+                "INDICATOR_MATCHES_SIDE_GLANCE",
+                "MIRROR_CHECK_DURATION_EXCEEDED",
+            ]
+
+    def _sanctioned_mirror_check_eligible(
+        self,
+        state: DMSState,
+        vehicle: VehicleRuntimeState,
+    ) -> tuple[bool, str]:
+        if not self.config.mirror_check_requires_matching_indicator:
+            return False, "UNKNOWN"
+        if not vehicle.dms_alerts_enabled or vehicle.dms_operational_mode not in {
+            "DMS_ACTIVATED",
+            "DMS_ACTIVE_MONITORING",
+            "DMS_LIMITED",
+        }:
+            return False, "UNKNOWN"
+        if vehicle.left_indicator_on == vehicle.right_indicator_on:
+            return False, "UNKNOWN"
+        yaw = state.gaze.relative_yaw_deg
+        pitch_down = max(0.0, state.gaze.relative_pitch_deg)
+        matching_left = vehicle.left_indicator_on and yaw <= -self.config.sanctioned_mirror_min_yaw_deg
+        matching_right = vehicle.right_indicator_on and yaw >= self.config.sanctioned_mirror_min_yaw_deg
+        if not (matching_left or matching_right):
+            return False, "UNKNOWN"
+        side_glance_ms = state.attention.side_glance_duration_ms
+        if side_glance_ms > min(self.config.sanctioned_mirror_max_ms, self.config.mirror_check_allowed_ms):
+            return False, "LEFT" if matching_left else "RIGHT"
+        if pitch_down > self.config.sanctioned_mirror_max_pitch_down_deg:
+            return False, "UNKNOWN"
+        eye_visibility = (
+            state.drowsiness.eye_visibility_score
+            if state.drowsiness.eye_visibility_score > 0.0
+            else state.dms_health.eye_visibility_score
         )
-        if (
-            self.config.mirror_check_requires_matching_indicator
-            and matching_indicator
-            and pitch <= self.config.mirror_check_max_abs_pitch_deg
-            and no_phone_or_drowsy
+        if self.config.sanctioned_mirror_block_low_eye_visibility and (
+            eye_visibility < self.config.eye_visibility_min_confidence
+            or "LOW_EYE_VISIBILITY" in state.driver_observability.reason_codes
+            or "LOW_EYE_VISIBILITY" in state.attention.attention_reason_codes
         ):
-            side = "LEFT" if matching_left else "RIGHT"
-            if side_glance_ms <= self.config.mirror_check_allowed_ms:
-                vehicle.sanctioned_task_state = f"{side}_MIRROR_CHECK_ALLOWED"
-                vehicle.sanctioned_task_reason_codes = [
-                    "INDICATOR_MATCHES_SIDE_GLANCE",
-                    "MIRROR_CHECK_ALLOWED",
-                    "DISTRACTION_WARNING_SUPPRESSED_MIRROR_CHECK",
-                ]
-                state.dms_v02.final_banner = "NORMAL"
-                state.dms_v02.final_level = DMSV02Level.NORMAL
-                state.dms_v02.final_decision_path = "NORMAL > sanctioned_mirror_check"
-            elif side_glance_ms <= self.config.mirror_check_monitor_ms:
-                vehicle.sanctioned_task_state = f"{side}_MIRROR_CHECK_MONITOR"
-                vehicle.sanctioned_task_reason_codes = [
-                    "INDICATOR_MATCHES_SIDE_GLANCE",
-                    "MIRROR_CHECK_MONITOR",
-                ]
-                state.dms_v02.final_banner = "DMS MONITOR"
-                state.dms_v02.final_level = DMSV02Level.MONITOR
-                state.dms_v02.final_decision_path = "MONITOR > sanctioned_mirror_check"
-            else:
-                vehicle.sanctioned_task_state = f"{side}_MIRROR_CHECK_EXCEEDED"
-                vehicle.sanctioned_task_reason_codes = [
-                    "INDICATOR_MATCHES_SIDE_GLANCE",
-                    "MIRROR_CHECK_DURATION_EXCEEDED",
-                ]
+            return False, "UNKNOWN"
+        if self._mirror_blocked_by_behavior_or_safety(state):
+            return False, "UNKNOWN"
+        return True, "LEFT" if matching_left else "RIGHT"
+
+    def _mirror_blocked_by_behavior_or_safety(self, state: DMSState) -> bool:
+        reasons = set(
+            state.dms_v02.reason_codes
+            + state.dms_v02.classification_reason_codes
+            + state.attention.attention_reason_codes
+            + state.phone_use.reason_codes
+            + state.driver_availability.reason_codes
+            + state.driver_observability.reason_codes
+        )
+        if state.dms_v02.final_banner in {"DROWSINESS WARNING", "DANGER", "DRIVER UNAVAILABLE", "DMS DEGRADED"}:
+            return True
+        if state.dms_v02.final_level in {DMSV02Level.DANGER, DMSV02Level.CRITICAL, DMSV02Level.DEGRADED}:
+            return True
+        if state.driver_availability.state.value != "AVAILABLE":
+            return True
+        if state.driver_observability.state.value in {"UNOBSERVABLE_TEMP", "UNOBSERVABLE_LONG"}:
+            return True
+        if state.drowsiness.level.value in {"MICROSLEEP", "HIGH"}:
+            return True
+        if state.attention.head_down_duration_ms > 0 or "HEAD_DOWN" in reasons or "HEAD_DOWN_CANDIDATE" in reasons:
+            return True
+        if self.config.sanctioned_mirror_block_phone_like_posture:
+            if state.phone_use.driver_state not in {"NO_PHONE", "UNKNOWN"}:
+                return True
+            if state.attention.phone_down_candidate_duration_ms > 0 or state.attention.phone_texting_candidate_duration_ms > 0:
+                return True
+            if {
+                "POSSIBLE_PHONE_POSTURE",
+                "PHONE_DOWN_SUSPECTED",
+                "PHONE_TO_EAR_SUSPECTED",
+                "PHONE_TEXTING_SCROLLING_SUSPECTED",
+                "PHONE_WARNING_FROM_POSTURE",
+            } & reasons:
+                return True
+        if "MICROSLEEP_CANDIDATE" in reasons or "DROWSINESS_VALID_MICROSLEEP" in reasons:
+            return True
+        return False
 
     def _apply_hmi_banner(self, state: DMSState, vehicle: VehicleRuntimeState) -> None:
         raw_banner = state.dms_v02.final_banner or "NORMAL"
@@ -226,7 +281,9 @@ class VehicleStateManager:
             if "SIDE" in sub:
                 return "HEAD_TURNED_SIDE", "Head turned side"
             if "HEAD_DOWN" in sub or "PHONE" in sub:
-                return "HEAD_DOWN_OR_PHONE", "Head down / phone posture"
+                if self._has_cabin_phone_evidence(state):
+                    return "HEAD_DOWN_OR_PHONE", "Head down / phone posture"
+                return "HEAD_DOWN_OR_POSSIBLE_PHONE", "Head down / possible phone posture"
             return "VISUAL_DISTRACTION", "Visual distraction"
         if banner == "DROWSINESS WARNING":
             return "DROWSINESS_EVIDENCE", "Drowsiness evidence"
@@ -235,8 +292,34 @@ class VehicleStateManager:
         if banner == "DRIVER UNAVAILABLE":
             return "DRIVER_UNAVAILABLE", "Driver unavailable"
         if banner == "DANGER":
-            return "DANGER", "Immediate risk"
+            return self._danger_subtype(state)
         return "UNKNOWN", banner
+
+    def _has_cabin_phone_evidence(self, state: DMSState) -> bool:
+        return state.cabin_evidence.phone_state.value in {
+            "PHONE_OBJECT_CANDIDATE",
+            "PHONE_IN_HAND_SUSPECTED",
+            "PHONE_TO_EAR_SUSPECTED",
+            "PHONE_DOWN_TEXTING_SUSPECTED",
+            "PHONE_CONFIRMED",
+        }
+
+    def _danger_subtype(self, state: DMSState) -> tuple[str, str]:
+        path = state.dms_v02.final_decision_path
+        reasons = set(state.dms_v02.reason_codes + state.dms_v02.classification_reason_codes)
+        if "MICROSLEEP" in path or state.drowsiness.level.value == "MICROSLEEP":
+            return "DANGER_MICROSLEEP", "Microsleep"
+        if "EYE_CLOSURE" in path or state.drowsiness.eye_closure_duration_ms >= self.config.eye_closure_microsleep_ms:
+            return "DANGER_EYES_CLOSED", "Sustained eyes closed"
+        if "HEAD_DOWN" in path or "HEAD_DOWN" in reasons:
+            return "DANGER_HEAD_DOWN", "Head-down distraction"
+        if "GAZE_OFF_ROAD" in reasons or "VISUAL" in path:
+            return "DANGER_OFF_ROAD_GAZE", "Sustained off-road gaze"
+        if state.driver_availability.state.value == "UNAVAILABLE":
+            return "DANGER_DRIVER_UNAVAILABLE_RISK", "Driver unavailable risk"
+        if "ATTENTION" in path:
+            return "DANGER_ATTENTION_LOSS", "Attention loss"
+        return "DANGER", "Immediate risk"
 
     def _vehicle_monitor_line(self, vehicle: VehicleRuntimeState) -> str:
         left = "ON" if vehicle.left_indicator_on else "OFF"

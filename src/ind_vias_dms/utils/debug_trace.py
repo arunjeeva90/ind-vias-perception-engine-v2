@@ -41,6 +41,7 @@ class DebugTraceRecorder:
         self.keyframe_after_ms = keyframe_after_ms
         self.events: list[dict[str, Any]] = []
         self._last_event_key: tuple[str, str, str] | None = None
+        self._last_cabin_key: tuple[str, str, str] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -108,14 +109,19 @@ class DebugTraceRecorder:
         state: DMSState,
         frame: np.ndarray,
     ) -> None:
-        key = (
-            state.dms_v02.final_banner,
-            state.attention.attention_state.value,
-            state.attention.attention_substate.value,
+        cabin_key = (
             state.cabin_evidence.phone_state.value,
             state.cabin_evidence.seatbelt_state.value,
             state.cabin_evidence.smoking_state.value,
         )
+        cabin_event_type = _cabin_event_type(self._last_cabin_key, cabin_key)
+        key = (
+            state.dms_v02.final_banner,
+            state.attention.attention_state.value,
+            state.attention.attention_substate.value,
+            cabin_event_type,
+        )
+        self._last_cabin_key = cabin_key
         if key == self._last_event_key:
             return
         self._last_event_key = key
@@ -133,7 +139,7 @@ class DebugTraceRecorder:
             "cabin_phone_state": state.cabin_evidence.phone_state.value,
             "cabin_seatbelt_state": state.cabin_evidence.seatbelt_state.value,
             "cabin_smoking_state": state.cabin_evidence.smoking_state.value,
-            "cabin_event_type": _cabin_event_type(state),
+            "cabin_event_type": cabin_event_type,
         }
         self.events.append(event)
         if self.review_bundle_dir is not None and self.save_event_keyframes:
@@ -244,20 +250,34 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
     }
 
 
-def _cabin_event_type(state: DMSState) -> str:
-    phone = state.cabin_evidence.phone_state.value
-    belt = state.cabin_evidence.seatbelt_state.value
-    smoking = state.cabin_evidence.smoking_state.value
-    if phone == "PHONE_OBJECT_CANDIDATE":
+def _cabin_event_type(
+    previous: tuple[str, str, str] | None,
+    current: tuple[str, str, str],
+) -> str:
+    phone, belt, smoking = current
+    prev_phone, prev_belt, prev_smoking = previous or ("NO_PHONE", "SEATBELT_UNKNOWN", "NO_SMOKING")
+    if prev_phone == phone and prev_belt == belt and prev_smoking == smoking:
+        return ""
+    if prev_phone == "NO_PHONE" and phone == "PHONE_OBJECT_CANDIDATE":
         return "CABIN_PHONE_CANDIDATE_STARTED"
-    if phone in {"PHONE_IN_HAND_SUSPECTED", "PHONE_TO_EAR_SUSPECTED", "PHONE_DOWN_TEXTING_SUSPECTED"}:
+    if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone in {
+        "PHONE_IN_HAND_SUSPECTED",
+        "PHONE_TO_EAR_SUSPECTED",
+        "PHONE_DOWN_TEXTING_SUSPECTED",
+    }:
         return "CABIN_PHONE_SUSPECTED"
-    if phone == "NO_PHONE":
+    if prev_phone != "NO_PHONE" and phone == "NO_PHONE":
         return "CABIN_PHONE_CLEARED"
-    if belt in {"SEATBELT_UNKNOWN", "SEATBELT_NOT_VISIBLE"}:
+    if prev_belt == "SEATBELT_UNKNOWN" and belt in {"SEATBELT_NOT_VISIBLE", "SEATBELT_NOT_WORN_SUSPECTED"}:
         return "CABIN_SEATBELT_UNKNOWN"
-    if smoking == "HAND_TO_MOUTH_CANDIDATE":
+    if prev_belt != "SEATBELT_WORN_CONFIRMED" and belt == "SEATBELT_WORN_CONFIRMED":
+        return "CABIN_SEATBELT_WORN_CONFIRMED"
+    if prev_smoking == "NO_SMOKING" and smoking == "HAND_TO_MOUTH_CANDIDATE":
         return "CABIN_SMOKING_CANDIDATE_STARTED"
+    if prev_smoking == "HAND_TO_MOUTH_CANDIDATE" and smoking == "SMOKING_SUSPECTED":
+        return "CABIN_SMOKING_SUSPECTED"
+    if prev_smoking != "NO_SMOKING" and smoking == "NO_SMOKING":
+        return "CABIN_SMOKING_CLEARED"
     return ""
 
 

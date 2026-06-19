@@ -416,6 +416,10 @@ def status_dashboard_lines(
             f"L={'ON' if state.vehicle.left_indicator_on else 'OFF'} "
             f"R={'ON' if state.vehicle.right_indicator_on else 'OFF'}",
         ),
+        ("Cabin phone", state.cabin_evidence.phone_state.value),
+        ("Cabin belt", state.cabin_evidence.seatbelt_state.value),
+        ("Cabin smoking", state.cabin_evidence.smoking_state.value),
+        ("Cabin affect", "YES" if state.cabin_evidence.affect_final_dms_state else "NO"),
         ("HMI banner", state.dms_v02.hmi_banner_text or state.dms_v02.final_banner),
         (
             "Head angle",
@@ -520,11 +524,6 @@ def status_dashboard_lines(
         ),
         ("Occ conf", f"{state.occupancy.occupancy_confidence:.2f}"),
         ("Occ reason", ",".join(state.occupancy.occupancy_reason_codes) or "NONE"),
-        ("Cabin Evidence", f"count={state.cabin_evidence.cabin_evidence_count}"),
-        ("Cabin Phone", state.cabin_evidence.phone_state.value),
-        ("Cabin Seat belt", state.cabin_evidence.seatbelt_state.value),
-        ("Cabin Smoking", state.cabin_evidence.smoking_state.value),
-        ("Cabin Affect DMS", "YES" if state.cabin_evidence.affect_final_dms_state else "NO"),
         ("Gaze", state.gaze.zone.value),
         ("Gaze confidence", f"{state.gaze.confidence:.2f}"),
         (
