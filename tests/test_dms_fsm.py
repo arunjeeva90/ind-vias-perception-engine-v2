@@ -2885,6 +2885,95 @@ def test_v0244_mirror_check_does_not_suppress_phone_or_drowsy_warning():
     assert updated.dms_v02.final_banner == "DISTRACTION WARNING"
 
 
+def test_v0251_mirror_check_blocks_head_down_candidate():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    manager.toggle_right_indicator()
+    state = _validated_road_state_v0244(1000)
+    state.gaze.relative_yaw_deg = 45.0
+    state.attention.side_glance_duration_ms = 900
+    state.attention.head_down_duration_ms = 300
+    state.attention.attention_substate = AttentionSubstate.HEAD_DOWN_CANDIDATE
+    state.attention.attention_reason_codes = ["HEAD_DOWN", "HEAD_DOWN_CANDIDATE"]
+    state.dms_v02.final_level = DMSV02Level.WARNING
+    state.dms_v02.final_banner = "DISTRACTION WARNING"
+
+    updated = manager.update(state, timestamp_ms=1000)
+
+    assert updated.vehicle.sanctioned_task_state == "NONE"
+    assert updated.dms_v02.final_banner == "DISTRACTION WARNING"
+
+
+def test_v0251_mirror_check_blocks_phone_posture():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    manager.toggle_left_indicator()
+    state = _validated_road_state_v0244(1000)
+    state.gaze.relative_yaw_deg = -45.0
+    state.attention.side_glance_duration_ms = 900
+    state.phone_use.reason_codes = ["POSSIBLE_PHONE_POSTURE"]
+    state.dms_v02.final_level = DMSV02Level.WARNING
+    state.dms_v02.final_banner = "DISTRACTION WARNING"
+
+    updated = manager.update(state, timestamp_ms=1000)
+
+    assert updated.vehicle.sanctioned_task_state == "NONE"
+    assert updated.dms_v02.final_banner == "DISTRACTION WARNING"
+
+
+def test_v0251_mirror_check_blocks_low_eye_visibility():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    manager.toggle_right_indicator()
+    state = _validated_road_state_v0244(1000)
+    state.gaze.relative_yaw_deg = 45.0
+    state.attention.side_glance_duration_ms = 900
+    state.drowsiness.eye_visibility_score = 0.1
+    state.dms_v02.final_level = DMSV02Level.WARNING
+    state.dms_v02.final_banner = "DISTRACTION WARNING"
+
+    updated = manager.update(state, timestamp_ms=1000)
+
+    assert updated.vehicle.sanctioned_task_state == "NONE"
+    assert updated.dms_v02.final_banner == "DISTRACTION WARNING"
+
+
+def test_v0251_mirror_check_blocks_microsleep_danger():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    manager.update(_validated_road_state_v0244(0), timestamp_ms=0)
+    manager.toggle_right_indicator()
+    state = _validated_road_state_v0244(1000)
+    state.gaze.relative_yaw_deg = 45.0
+    state.attention.side_glance_duration_ms = 900
+    state.drowsiness.level = DrowsinessLevel.MICROSLEEP
+    state.dms_v02.final_level = DMSV02Level.DANGER
+    state.dms_v02.final_banner = "DANGER"
+    state.dms_v02.final_decision_path = "DANGER > MICROSLEEP_OR_LONG_EYE_CLOSURE"
+
+    updated = manager.update(state, timestamp_ms=3000)
+
+    assert updated.vehicle.sanctioned_task_state == "NONE"
+    assert updated.dms_v02.final_banner == "DANGER"
+    assert "Microsleep" in updated.dms_v02.hmi_banner_text
+
+
+def test_v0251_posture_only_phone_warning_wording_is_softened():
+    manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
+    manager.speed_kph = 35.0
+    manager.update(_validated_road_state_v0244(0), timestamp_ms=0)
+    state = _validated_road_state_v0244(1000)
+    state.attention.attention_substate = AttentionSubstate.PHONE_DOWN_SUSPECTED
+    state.dms_v02.final_level = DMSV02Level.WARNING
+    state.dms_v02.final_banner = "DISTRACTION WARNING"
+    state.dms_v02.final_decision_path = "WARNING > PHONE_SUSPECTED"
+
+    updated = manager.update(state, timestamp_ms=3000)
+
+    assert "possible phone posture" in updated.dms_v02.hmi_banner_text
+    assert "Head down / phone posture" not in updated.dms_v02.hmi_banner_text
+
+
 def test_v0244_status_and_vehicle_monitor_include_vehicle_gate_lines():
     manager = VehicleStateManager(DMSConfig(vehicle_speed_startup_ramp_enabled=False, vehicle_speed_initial_kph=35.0))
     manager.speed_kph = 35.0

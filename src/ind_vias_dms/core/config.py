@@ -69,6 +69,12 @@ class DMSConfig:
     mirror_check_warning_ms: int = 4000
     mirror_check_max_abs_pitch_deg: float = 20.0
     mirror_check_requires_matching_indicator: bool = True
+    sanctioned_mirror_max_ms: int = 2500
+    sanctioned_mirror_min_yaw_deg: float = 12.0
+    sanctioned_mirror_max_pitch_down_deg: float = 12.0
+    sanctioned_mirror_require_eye_visibility: bool = True
+    sanctioned_mirror_block_phone_like_posture: bool = True
+    sanctioned_mirror_block_low_eye_visibility: bool = True
     speed_aware_microsleep_enabled: bool = True
     microsleep_threshold_low_speed_ms: int = 1800
     microsleep_threshold_high_speed_ms: int = 1200
