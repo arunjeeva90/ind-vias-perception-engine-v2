@@ -40,6 +40,7 @@ from ind_vias_dms.core.types import (
     PresenceState,
     RiskLevel,
 )
+from ind_vias_dms.temporal.cabin_evidence_fusion import CabinEvidenceFusion
 from ind_vias_dms.temporal.blink_tracker import BlinkTracker
 from ind_vias_dms.temporal.attention_state import AttentionSignals, AttentionStateClassifier
 from ind_vias_dms.temporal.distraction_fsm import DistractionFSM
@@ -52,6 +53,7 @@ from ind_vias_dms.vision.eye_state import EyeState, EyeStateEstimator
 from ind_vias_dms.vision.face_landmarks import FaceLandmarkBackend, FaceLandmarkResult
 from ind_vias_dms.vision.gaze import GazeEstimate, GazeEstimator
 from ind_vias_dms.vision.head_pose import HeadPose, HeadPoseEstimator
+from ind_vias_dms.vision.cabin_object_detection import CabinObjectDetector
 from ind_vias_dms.vision.phone_detection import MobileDistractionEstimator
 from ind_vias_dms.vision.seatbelt import SeatbeltDetectionPlaceholder
 
@@ -85,6 +87,8 @@ class DMSPipeline:
         self.attention_classifier = AttentionStateClassifier(config)
         self.v02_decision = DMSV02DecisionMatrix(config)
         self.phone_detector = MobileDistractionEstimator(config)
+        self.cabin_object_detector = CabinObjectDetector(config)
+        self.cabin_evidence_fusion = CabinEvidenceFusion(config)
         self.seatbelt_detector = SeatbeltDetectionPlaceholder()
         self.fps_meter = FPSMeter()
         self.no_face_since_ms: int | None = None
@@ -551,6 +555,19 @@ class DMSPipeline:
             f"rel {road_axis_pose.relative_yaw_deg:.1f}/"
             f"{road_axis_pose.relative_pitch_deg:.1f}/{road_axis_pose.relative_roll_deg:.1f}"
         )
+        raw_cabin_evidence = self.cabin_object_detector.detect(
+            frame,
+            timestamp_ms,
+            context={
+                "driver_face": face,
+                "driver_roi_norm": self.occupants._roi("driver_roi_norm"),
+            },
+        )
+        cabin_evidence = self.cabin_evidence_fusion.update(
+            raw_cabin_evidence,
+            timestamp_ms,
+            backend_status=self.cabin_object_detector.backend_status,
+        )
 
         state = DMSState(
             timestamp_ms=timestamp_ms,
@@ -679,6 +696,7 @@ class DMSPipeline:
             dms_v02=v02,
             occupancy=occupancy,
             seatbelt_authenticity=self.seatbelt_detector.process(frame),
+            cabin_evidence=cabin_evidence,
             driver_readiness_score=readiness,
         )
         context = {
@@ -695,6 +713,8 @@ class DMSPipeline:
             "face_backend": self.face_backend.last_backend_used,
             "nir_mode": self.face_backend.last_nir_mode,
             "driver_roi_norm": self.occupants._roi("driver_roi_norm"),
+            "cabin_evidence": cabin_evidence,
+            "raw_cabin_evidence": raw_cabin_evidence,
         }
         return state, context
 

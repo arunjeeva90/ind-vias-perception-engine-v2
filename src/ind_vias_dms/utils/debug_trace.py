@@ -76,6 +76,10 @@ class DebugTraceRecorder:
                         "reason_codes",
                         "raw_observation_codes",
                         "classification_reason_codes",
+                        "cabin_phone_state",
+                        "cabin_seatbelt_state",
+                        "cabin_smoking_state",
+                        "cabin_event_type",
                     ],
                 )
                 writer.writeheader()
@@ -108,6 +112,9 @@ class DebugTraceRecorder:
             state.dms_v02.final_banner,
             state.attention.attention_state.value,
             state.attention.attention_substate.value,
+            state.cabin_evidence.phone_state.value,
+            state.cabin_evidence.seatbelt_state.value,
+            state.cabin_evidence.smoking_state.value,
         )
         if key == self._last_event_key:
             return
@@ -123,6 +130,10 @@ class DebugTraceRecorder:
             "reason_codes": ",".join(record.get("reason_codes", [])),
             "raw_observation_codes": ",".join(record.get("raw_observation_codes", [])),
             "classification_reason_codes": ",".join(record.get("classification_reason_codes", [])),
+            "cabin_phone_state": state.cabin_evidence.phone_state.value,
+            "cabin_seatbelt_state": state.cabin_evidence.seatbelt_state.value,
+            "cabin_smoking_state": state.cabin_evidence.smoking_state.value,
+            "cabin_event_type": _cabin_event_type(state),
         }
         self.events.append(event)
         if self.review_bundle_dir is not None and self.save_event_keyframes:
@@ -215,6 +226,13 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         "gaze": _jsonable(asdict(state.gaze)),
         "drowsiness": _jsonable(asdict(state.drowsiness)),
         "phone_use": _jsonable(asdict(state.phone_use)),
+        "cabin_evidence": _jsonable(asdict(state.cabin_evidence)),
+        "phone_state": state.cabin_evidence.phone_state.value,
+        "seatbelt_state": state.cabin_evidence.seatbelt_state.value,
+        "smoking_state": state.cabin_evidence.smoking_state.value,
+        "cabin_evidence_count": state.cabin_evidence.cabin_evidence_count,
+        "evidence_objects": _jsonable(asdict(state.cabin_evidence).get("evidence_objects", [])),
+        "affect_final_dms_state": state.cabin_evidence.affect_final_dms_state,
         "distraction": _jsonable(asdict(state.distraction)),
         "attention": _jsonable(asdict(state.attention)),
         "dms_v02": _jsonable(asdict(state.dms_v02)),
@@ -224,6 +242,23 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         "reason_codes": classification_reason_codes,
         "contradiction_flags": contradiction_flags,
     }
+
+
+def _cabin_event_type(state: DMSState) -> str:
+    phone = state.cabin_evidence.phone_state.value
+    belt = state.cabin_evidence.seatbelt_state.value
+    smoking = state.cabin_evidence.smoking_state.value
+    if phone == "PHONE_OBJECT_CANDIDATE":
+        return "CABIN_PHONE_CANDIDATE_STARTED"
+    if phone in {"PHONE_IN_HAND_SUSPECTED", "PHONE_TO_EAR_SUSPECTED", "PHONE_DOWN_TEXTING_SUSPECTED"}:
+        return "CABIN_PHONE_SUSPECTED"
+    if phone == "NO_PHONE":
+        return "CABIN_PHONE_CLEARED"
+    if belt in {"SEATBELT_UNKNOWN", "SEATBELT_NOT_VISIBLE"}:
+        return "CABIN_SEATBELT_UNKNOWN"
+    if smoking == "HAND_TO_MOUTH_CANDIDATE":
+        return "CABIN_SMOKING_CANDIDATE_STARTED"
+    return ""
 
 
 def _jsonable(value: Any) -> Any:

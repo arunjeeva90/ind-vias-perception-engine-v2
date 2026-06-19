@@ -352,6 +352,20 @@ phone_object_detection:
     - CENTER_CONSOLE
     - STEERING_WHEEL_LOWER
   allow_missing_model: true
+cabin_evidence:
+  enabled: true
+  detector_backend: dummy
+  model_path: ""
+  min_confidence: 0.35
+  temporal_confirm_ms: 1200
+  temporal_clear_ms: 700
+  phone_confirm_ms: 1500
+  phone_to_ear_confirm_ms: 1200
+  phone_down_texting_confirm_ms: 1500
+  seatbelt_confirm_ms: 3000
+  smoking_confirm_ms: 2500
+  draw_cabin_evidence: true
+  affect_final_dms_state: false
 head_down_uncertain_sustain_ms: 1200
 head_down_candidate_ms: 500
 head_down_warning_ms: 1200

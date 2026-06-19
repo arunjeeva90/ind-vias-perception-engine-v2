@@ -103,6 +103,65 @@ class DMSConfidenceState(StableStrEnum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+class CabinEvidenceObjectType(StableStrEnum):
+    PHONE = "PHONE"
+    CIGARETTE = "CIGARETTE"
+    SEATBELT = "SEATBELT"
+    HAND = "HAND"
+    UNKNOWN_OBJECT = "UNKNOWN_OBJECT"
+
+
+class CabinEvidenceRegion(StableStrEnum):
+    DRIVER = "DRIVER"
+    PASSENGER = "PASSENGER"
+    REAR = "REAR"
+    UNKNOWN = "UNKNOWN"
+
+
+class CabinEvidenceRelation(StableStrEnum):
+    NEAR_EAR = "NEAR_EAR"
+    NEAR_LAP = "NEAR_LAP"
+    NEAR_HAND = "NEAR_HAND"
+    NEAR_MOUTH = "NEAR_MOUTH"
+    ACROSS_TORSO = "ACROSS_TORSO"
+    UNKNOWN = "UNKNOWN"
+
+
+class CabinEvidenceLifecycleState(StableStrEnum):
+    RAW = "RAW"
+    CANDIDATE = "CANDIDATE"
+    SUSPECTED = "SUSPECTED"
+    CONFIRMED = "CONFIRMED"
+    REJECTED = "REJECTED"
+
+
+class CabinPhoneState(StableStrEnum):
+    NO_PHONE = "NO_PHONE"
+    PHONE_OBJECT_CANDIDATE = "PHONE_OBJECT_CANDIDATE"
+    PHONE_IN_HAND_SUSPECTED = "PHONE_IN_HAND_SUSPECTED"
+    PHONE_TO_EAR_SUSPECTED = "PHONE_TO_EAR_SUSPECTED"
+    PHONE_DOWN_TEXTING_SUSPECTED = "PHONE_DOWN_TEXTING_SUSPECTED"
+    PHONE_CONFIRMED = "PHONE_CONFIRMED"
+    PHONE_UNKNOWN = "PHONE_UNKNOWN"
+
+
+class CabinSeatbeltState(StableStrEnum):
+    SEATBELT_UNKNOWN = "SEATBELT_UNKNOWN"
+    SEATBELT_WORN_CONFIRMED = "SEATBELT_WORN_CONFIRMED"
+    SEATBELT_NOT_VISIBLE = "SEATBELT_NOT_VISIBLE"
+    SEATBELT_NOT_WORN_SUSPECTED = "SEATBELT_NOT_WORN_SUSPECTED"
+    SEATBELT_MISUSE_SUSPECTED = "SEATBELT_MISUSE_SUSPECTED"
+    SEATBELT_CONFIDENCE_LOW = "SEATBELT_CONFIDENCE_LOW"
+
+
+class CabinSmokingState(StableStrEnum):
+    NO_SMOKING = "NO_SMOKING"
+    HAND_TO_MOUTH_CANDIDATE = "HAND_TO_MOUTH_CANDIDATE"
+    SMOKING_SUSPECTED = "SMOKING_SUSPECTED"
+    SMOKING_CONFIRMED = "SMOKING_CONFIRMED"
+    SMOKING_UNKNOWN = "SMOKING_UNKNOWN"
+
+
 class AttentionSubstate(StableStrEnum):
     ROAD = "ROAD"
     ROAD_AXIS_NORMAL = "ROAD_AXIS_NORMAL"
@@ -265,6 +324,38 @@ class PhoneUseState:
     phone_down_candidate_ms: int = 0
     phone_to_ear_candidate_ms: int = 0
     phone_final_state: str = "UNKNOWN"
+
+
+@dataclass
+class CabinEvidenceObject:
+    object_type: CabinEvidenceObjectType = CabinEvidenceObjectType.UNKNOWN_OBJECT
+    bbox: list[float] = field(default_factory=list)
+    confidence: float = 0.0
+    source: str = "dummy"
+    region: CabinEvidenceRegion = CabinEvidenceRegion.UNKNOWN
+    relation_to_driver: CabinEvidenceRelation = CabinEvidenceRelation.UNKNOWN
+    first_seen_ms: int = 0
+    last_seen_ms: int = 0
+    duration_ms: int = 0
+    stable_count: int = 0
+    state: CabinEvidenceLifecycleState = CabinEvidenceLifecycleState.RAW
+
+
+@dataclass
+class CabinEvidenceState:
+    enabled: bool = True
+    detector_backend: str = "dummy"
+    backend_status: str = "DUMMY"
+    affect_final_dms_state: bool = False
+    phone_state: CabinPhoneState = CabinPhoneState.NO_PHONE
+    seatbelt_state: CabinSeatbeltState = CabinSeatbeltState.SEATBELT_UNKNOWN
+    smoking_state: CabinSmokingState = CabinSmokingState.NO_SMOKING
+    cabin_evidence_count: int = 0
+    evidence_objects: list[CabinEvidenceObject] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
+    phone_reason_codes: list[str] = field(default_factory=list)
+    seatbelt_reason_codes: list[str] = field(default_factory=list)
+    smoking_reason_codes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -476,6 +567,7 @@ class DMSState:
     vehicle: VehicleRuntimeState = field(default_factory=VehicleRuntimeState)
     occupancy: OccupancyState = field(default_factory=OccupancyState)
     seatbelt_authenticity: SeatbeltAuthenticity = field(default_factory=SeatbeltAuthenticity)
+    cabin_evidence: CabinEvidenceState = field(default_factory=CabinEvidenceState)
     driver_readiness_score: DriverReadinessScore = field(default_factory=DriverReadinessScore)
 
     def to_dict(self) -> dict[str, Any]:

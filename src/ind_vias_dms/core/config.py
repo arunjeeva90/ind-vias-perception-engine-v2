@@ -339,6 +339,7 @@ class DMSConfig:
     overlay_panel_embedded: bool = True
     attention_state: dict[str, Any] | None = None
     phone_object_detection: dict[str, Any] | None = None
+    cabin_evidence: dict[str, Any] | None = None
     head_down_uncertain_sustain_ms: int = 1200
     head_down_candidate_ms: int = 500
     head_down_warning_ms: int = 1200
