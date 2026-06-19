@@ -74,6 +74,8 @@ class OverlayRenderer:
             self._draw_norm_roi(out, driver_roi_norm)
         if face_proposals and show_debug_proposal_boxes:
             self._draw_face_proposals(out, face_proposals)
+        if state.cabin_evidence.enabled and state.cabin_evidence.evidence_objects:
+            self._draw_cabin_evidence(out, state)
         if draw_all_faces and faces:
             self._draw_occupant_boxes(out, faces, state, show_track_id)
         elif face.bbox is not None:
@@ -216,6 +218,25 @@ class OverlayRenderer:
                 (proposal.bbox[0], max(18, proposal.bbox[1] - 4)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.35,
+                color,
+                1,
+            )
+
+    def _draw_cabin_evidence(self, frame: np.ndarray, state: DMSState) -> None:
+        height, width = frame.shape[:2]
+        for obj in state.cabin_evidence.evidence_objects:
+            if not obj.bbox:
+                continue
+            x1, y1, x2, y2 = _bbox_to_px(obj.bbox, width, height)
+            color = (80, 220, 255)
+            label = _cabin_evidence_label(obj.object_type.value, obj.state.value)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1)
+            cv2.putText(
+                frame,
+                label,
+                (x1, max(18, y1 - 4)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.38,
                 color,
                 1,
             )
@@ -499,6 +520,11 @@ def status_dashboard_lines(
         ),
         ("Occ conf", f"{state.occupancy.occupancy_confidence:.2f}"),
         ("Occ reason", ",".join(state.occupancy.occupancy_reason_codes) or "NONE"),
+        ("Cabin Evidence", f"count={state.cabin_evidence.cabin_evidence_count}"),
+        ("Cabin Phone", state.cabin_evidence.phone_state.value),
+        ("Cabin Seat belt", state.cabin_evidence.seatbelt_state.value),
+        ("Cabin Smoking", state.cabin_evidence.smoking_state.value),
+        ("Cabin Affect DMS", "YES" if state.cabin_evidence.affect_final_dms_state else "NO"),
         ("Gaze", state.gaze.zone.value),
         ("Gaze confidence", f"{state.gaze.confidence:.2f}"),
         (
@@ -551,6 +577,31 @@ def _angle_label(value: float, negative_label: str, positive_label: str, limit: 
         return "0"
     direction = positive_label if value >= 0 else negative_label
     return f"{direction}{abs(value):02.0f}"
+
+
+def _bbox_to_px(bbox: list[float], width: int, height: int) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+    if max(abs(x1), abs(y1), abs(x2), abs(y2)) <= 1.5:
+        x1, x2 = x1 * width, x2 * width
+        y1, y2 = y1 * height, y2 * height
+    return (
+        max(0, min(width - 1, int(round(x1)))),
+        max(0, min(height - 1, int(round(y1)))),
+        max(0, min(width - 1, int(round(x2)))),
+        max(0, min(height - 1, int(round(y2)))),
+    )
+
+
+def _cabin_evidence_label(object_type: str, lifecycle: str) -> str:
+    if object_type == "PHONE":
+        if lifecycle in {"SUSPECTED", "CONFIRMED"}:
+            return f"PHONE {lifecycle}"
+        return "PHONE CANDIDATE"
+    if object_type == "SEATBELT":
+        return "SEATBELT WORN" if lifecycle == "CONFIRMED" else "SEATBELT UNKNOWN"
+    if object_type in {"CIGARETTE", "HAND"}:
+        return "SMOKING CANDIDATE" if lifecycle == "CANDIDATE" else f"SMOKING {lifecycle}"
+    return "CABIN EVIDENCE"
 
 
 def occupant_label(

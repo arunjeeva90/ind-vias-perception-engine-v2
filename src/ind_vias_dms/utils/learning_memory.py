@@ -65,6 +65,13 @@ class LearningMemoryWriter:
             "keyframe": keyframe,
             "driver_crop": "",
             "phone_crop": "",
+            "cabin_evidence": {
+                "phone_state": state.cabin_evidence.phone_state.value,
+                "seatbelt_state": state.cabin_evidence.seatbelt_state.value,
+                "smoking_state": state.cabin_evidence.smoking_state.value,
+                "evidence_count": state.cabin_evidence.cabin_evidence_count,
+                "affect_final_dms_state": state.cabin_evidence.affect_final_dms_state,
+            },
             "review_outputs_supported": [
                 "false_positive_library",
                 "false_negative_library",
@@ -90,6 +97,15 @@ class LearningMemoryWriter:
             or state.vehicle.sanctioned_task_state != "NONE"
             or state.vehicle.dms_alert_suppression_reason
             in {"STANDBY", "STARTUP_INITIALIZING"}
+            or state.cabin_evidence.phone_state.value not in {"NO_PHONE", "PHONE_UNKNOWN"}
+            or state.cabin_evidence.seatbelt_state.value
+            in {"SEATBELT_NOT_WORN_SUSPECTED", "SEATBELT_MISUSE_SUSPECTED"}
+            or (
+                state.cabin_evidence.cabin_evidence_count > 0
+                and state.cabin_evidence.seatbelt_state.value
+                in {"SEATBELT_UNKNOWN", "SEATBELT_NOT_VISIBLE"}
+            )
+            or state.cabin_evidence.smoking_state.value not in {"NO_SMOKING", "SMOKING_UNKNOWN"}
             or state.attention.attention_substate.value
             in {"FACE_LOST", "SIDE_PROFILE_TRACKED", "SIDE_PROFILE_ATTENTION_LOSS"}
         )
@@ -106,6 +122,30 @@ class LearningMemoryWriter:
         )
         if "MIRROR_CHECK_ALLOWED" in reasons:
             return "INDICATOR_SANCTIONED_MIRROR_CHECK"
+        if state.cabin_evidence.phone_state.value == "PHONE_OBJECT_CANDIDATE":
+            return "CABIN_PHONE_CANDIDATE"
+        if state.cabin_evidence.phone_state.value in {
+            "PHONE_IN_HAND_SUSPECTED",
+            "PHONE_TO_EAR_SUSPECTED",
+            "PHONE_DOWN_TEXTING_SUSPECTED",
+            "PHONE_CONFIRMED",
+        }:
+            return "CABIN_PHONE_SUSPECTED"
+        if state.cabin_evidence.seatbelt_state.value in {
+            "SEATBELT_NOT_WORN_SUSPECTED",
+            "SEATBELT_MISUSE_SUSPECTED",
+        } or (
+            state.cabin_evidence.cabin_evidence_count > 0
+            and state.cabin_evidence.seatbelt_state.value
+            in {"SEATBELT_UNKNOWN", "SEATBELT_NOT_VISIBLE"}
+        ):
+            return "CABIN_SEATBELT_UNKNOWN"
+        if state.cabin_evidence.smoking_state.value in {
+            "HAND_TO_MOUTH_CANDIDATE",
+            "SMOKING_SUSPECTED",
+            "SMOKING_CONFIRMED",
+        }:
+            return "CABIN_SMOKING_CANDIDATE"
         if state.vehicle.dms_alert_suppression_reason in {"STANDBY", "STARTUP_INITIALIZING"}:
             return "DMS_ALERT_SUPPRESSED_SPEED_GATE"
         if state.dms_v02.final_banner == "DMS DEGRADED" and state.attention.attention_substate.value.startswith("SIDE"):
