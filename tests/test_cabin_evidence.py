@@ -18,7 +18,7 @@ from ind_vias_dms.core.types import (
 from ind_vias_dms.temporal.cabin_evidence_fusion import CabinEvidenceFusion
 from ind_vias_dms.utils.debug_trace import DebugTraceRecorder
 from ind_vias_dms.utils.learning_memory import LearningMemoryWriter
-from ind_vias_dms.vision.cabin_object_detection import CabinObjectDetector, SyntheticCabinTimeline
+from ind_vias_dms.vision.cabin_object_detection import CabinClassMap, CabinObjectDetector, SyntheticCabinTimeline
 from ind_vias_dms.visualization.overlay import _cabin_evidence_label, banner_decision, status_dashboard_lines
 
 
@@ -388,3 +388,175 @@ def test_phone_relation_is_retained_when_phone_confirmed():
     assert state.phone_relation == "NEAR_EAR"
     assert state.phone_source == "synthetic"
     assert state.phone_confidence == 0.82
+
+
+def _onnx_detector(**overrides):
+    config = {
+        "enabled": True,
+        "detector_backend": "onnx",
+        "model_path": "",
+        "min_confidence": 0.35,
+        "nms_iou_threshold": 0.45,
+        "normalize_bboxes": True,
+    }
+    config.update(overrides)
+    return CabinObjectDetector(DMSConfig(cabin_evidence=config))
+
+
+def test_onnx_missing_model_path_returns_empty_safely():
+    detector = _onnx_detector(model_path="")
+
+    evidence = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8), 0)
+
+    assert evidence == []
+    assert detector.backend_status == "MODEL_MISSING"
+
+
+def test_onnx_nonexistent_model_path_returns_empty_safely(tmp_path):
+    detector = _onnx_detector(model_path=str(tmp_path / "missing.onnx"))
+
+    evidence = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8), 0)
+
+    assert evidence == []
+    assert detector.backend_status == "MODEL_MISSING"
+
+
+def test_cabin_class_map_loads_json_and_aliases(tmp_path):
+    path = tmp_path / "class_map.json"
+    path.write_text(
+        '{"classes":{"0":"cell phone","1":"seat belt"},"aliases":{"cell phone":"PHONE","seat belt":"SEATBELT"}}',
+        encoding="utf-8",
+    )
+
+    class_map = CabinClassMap(str(path))
+
+    assert class_map.status == "CLASS_MAP_READY"
+    assert class_map.object_type_for(0) == CabinEvidenceObjectType.PHONE
+    assert class_map.object_type_for(1) == CabinEvidenceObjectType.SEATBELT
+    assert class_map.canonical_name("mobile") == "PHONE"
+
+
+def test_onnx_parser_handles_n6_output():
+    detector = _onnx_detector()
+    output = np.array([[0.10, 0.20, 0.30, 0.40, 0.90, 0]], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert len(evidence) == 1
+    assert evidence[0].object_type == CabinEvidenceObjectType.PHONE
+    assert evidence[0].source == "onnx"
+
+
+def test_onnx_parser_handles_1_n_6_output():
+    detector = _onnx_detector()
+    output = np.array([[[0.10, 0.20, 0.30, 0.40, 0.90, 1]]], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert len(evidence) == 1
+    assert evidence[0].object_type == CabinEvidenceObjectType.SEATBELT
+
+
+def test_onnx_parser_handles_n_5_plus_c_output():
+    detector = _onnx_detector()
+    output = np.array([[0.10, 0.20, 0.30, 0.40, 0.90, 0.10, 0.80, 0.05]], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert len(evidence) == 1
+    assert evidence[0].object_type == CabinEvidenceObjectType.SEATBELT
+
+
+def test_onnx_parser_unknown_shape_is_safe():
+    detector = _onnx_detector()
+
+    evidence = detector.parse_outputs(np.zeros((2, 2, 2, 2), dtype=np.float32), (100, 100, 3))
+
+    assert evidence == []
+    assert detector.backend_status == "UNSUPPORTED_OUTPUT_SHAPE"
+
+
+def test_onnx_bboxes_are_clamped_and_low_confidence_filtered():
+    detector = _onnx_detector(min_confidence=0.50)
+    output = np.array([
+        [-0.10, 0.20, 1.20, 0.40, 0.90, 0],
+        [0.20, 0.20, 0.30, 0.30, 0.20, 0],
+    ], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 1.0, 1.0]})
+
+    assert len(evidence) == 1
+    assert evidence[0].bbox == [0.0, 0.20000000298023224, 1.0, 0.4000000059604645]
+
+
+def test_onnx_nms_removes_duplicate_detections():
+    detector = _onnx_detector(nms_iou_threshold=0.30)
+    output = np.array([
+        [0.10, 0.20, 0.40, 0.60, 0.90, 0],
+        [0.12, 0.22, 0.42, 0.62, 0.80, 0],
+    ], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 1.0, 1.0]})
+
+    assert len(evidence) == 1
+
+
+def test_onnx_roi_association_maps_driver_region():
+    detector = _onnx_detector()
+    output = np.array([[0.10, 0.20, 0.30, 0.40, 0.90, 0]], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert evidence[0].region == CabinEvidenceRegion.DRIVER
+
+
+def test_onnx_relation_infers_phone_near_ear_and_lap():
+    detector = _onnx_detector()
+    context = {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]}
+    output = np.array([
+        [0.10, 0.10, 0.30, 0.25, 0.90, 0],
+        [0.10, 0.75, 0.30, 0.90, 0.80, 0],
+    ], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, context)
+    relations = {obj.relation_to_driver for obj in evidence}
+
+    assert CabinEvidenceRelation.NEAR_EAR in relations
+    assert CabinEvidenceRelation.NEAR_LAP in relations
+
+
+def test_onnx_relation_infers_seatbelt_across_torso():
+    detector = _onnx_detector()
+    output = np.array([[0.10, 0.25, 0.35, 0.90, 0.90, 1]], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert evidence[0].relation_to_driver == CabinEvidenceRelation.ACROSS_TORSO
+
+
+def test_onnx_evidence_flows_through_temporal_fusion():
+    detector = _onnx_detector()
+    fusion = CabinEvidenceFusion(DMSConfig(cabin_evidence={"temporal_confirm_ms": 1200, "temporal_clear_ms": 5000, "phone_confirm_ms": 2500}))
+    output = np.array([[0.10, 0.50, 0.30, 0.65, 0.90, 0]], dtype=np.float32)
+    context = {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]}
+
+    first = detector.parse_outputs(output, (100, 100, 3), 1000, context)
+    second = detector.parse_outputs(output, (100, 100, 3), 2300, context)
+    fusion.update(first, 1000, backend_status=detector.backend_status)
+    state = fusion.update(second, 2300, backend_status=detector.backend_status)
+
+    assert state.phone_state == CabinPhoneState.PHONE_IN_HAND_SUSPECTED
+    assert state.affect_final_dms_state is False
+
+
+def test_status_lines_include_cabin_backend_status():
+    labels = [label for label, _ in status_dashboard_lines(DMSState(), fps=30.0)]
+
+    assert "Cabin status" in labels
+
+
+def test_onnx_overlay_label_uses_det_prefix():
+    label = _cabin_evidence_label("PHONE", "CANDIDATE", "onnx", "NEAR_HAND")
+
+    assert label.startswith("DET ")
+    assert "NEAR_HAND" in label

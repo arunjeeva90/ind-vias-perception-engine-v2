@@ -1,0 +1,20 @@
+﻿{
+  "version": "v0.2.6",
+  "classes": {
+    "0": "PHONE",
+    "1": "SEATBELT",
+    "2": "CIGARETTE",
+    "3": "HAND",
+    "4": "UNKNOWN_OBJECT"
+  },
+  "aliases": {
+    "cell phone": "PHONE",
+    "mobile": "PHONE",
+    "mobile phone": "PHONE",
+    "seat belt": "SEATBELT",
+    "seatbelt": "SEATBELT",
+    "cigarette": "CIGARETTE",
+    "smoke": "CIGARETTE",
+    "hand": "HAND"
+  }
+}

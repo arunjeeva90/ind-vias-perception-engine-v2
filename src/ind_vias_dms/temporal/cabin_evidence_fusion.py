@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import replace
 from typing import Iterable
@@ -101,6 +101,8 @@ class CabinEvidenceFusion:
             enabled=True,
             detector_backend=self.backend,
             backend_status=backend_status,
+            model_path=str(self.config.get("model_path", "")),
+            class_map_path=str(self.config.get("class_map_path", "")),
             synthetic_active=any(obj.source == "synthetic" for obj in fused_objects),
             affect_final_dms_state=self.affect_final_dms_state,
             phone_state=self._phone_state(timestamp_ms),
@@ -204,3 +206,5 @@ class CabinEvidenceFusion:
     @staticmethod
     def _smoking_reasons(state: CabinSmokingState) -> list[str]:
         return [] if state == CabinSmokingState.NO_SMOKING else [state.value]
+
+

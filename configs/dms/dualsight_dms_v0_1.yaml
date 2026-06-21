@@ -1,4 +1,4 @@
-face_backend: mediapipe
+﻿face_backend: mediapipe
 max_num_faces: 4
 nir_mode: auto
 enable_nir_preprocessing: true
@@ -362,6 +362,14 @@ cabin_evidence:
   enabled: true
   detector_backend: dummy
   model_path: ""
+  class_map_path: ""
+  input_width: 640
+  input_height: 640
+  nms_iou_threshold: 0.45
+  max_detections: 50
+  normalize_bboxes: true
+  roi_association_enabled: true
+  relation_inference_enabled: true
   synthetic_timeline_path: ""
   synthetic_use_normalized_bbox: true
   synthetic_default_confidence: 0.90
@@ -429,3 +437,5 @@ attention_state:
   prefer_distraction_when_eyes_open: true
   suppress_drowsiness_when_phone_likely: true
   degrade_on_sustained_ambiguous_attention_loss: true
+
+
