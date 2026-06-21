@@ -346,8 +346,12 @@ class CabinEvidenceState:
     enabled: bool = True
     detector_backend: str = "dummy"
     backend_status: str = "DUMMY"
+    synthetic_active: bool = False
     affect_final_dms_state: bool = False
     phone_state: CabinPhoneState = CabinPhoneState.NO_PHONE
+    phone_relation: str = "NONE"
+    phone_source: str = "NONE"
+    phone_confidence: float = 0.0
     seatbelt_state: CabinSeatbeltState = CabinSeatbeltState.SEATBELT_UNKNOWN
     smoking_state: CabinSmokingState = CabinSmokingState.NO_SMOKING
     cabin_evidence_count: int = 0

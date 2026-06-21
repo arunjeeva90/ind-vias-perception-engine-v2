@@ -362,6 +362,11 @@ cabin_evidence:
   enabled: true
   detector_backend: dummy
   model_path: ""
+  synthetic_timeline_path: ""
+  synthetic_use_normalized_bbox: true
+  synthetic_default_confidence: 0.90
+  synthetic_draw_objects: true
+  manual_keyboard_enabled: false
   min_confidence: 0.35
   temporal_confirm_ms: 1200
   temporal_clear_ms: 700

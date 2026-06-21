@@ -224,12 +224,28 @@ class OverlayRenderer:
 
     def _draw_cabin_evidence(self, frame: np.ndarray, state: DMSState) -> None:
         height, width = frame.shape[:2]
+        if state.cabin_evidence.detector_backend == "synthetic" and state.cabin_evidence.synthetic_active:
+            cv2.putText(
+                frame,
+                "CABIN EVIDENCE: SYNTHETIC TEST MODE",
+                (18, max(28, height - 18)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (80, 220, 255),
+                2,
+                cv2.LINE_AA,
+            )
         for obj in state.cabin_evidence.evidence_objects:
             if not obj.bbox:
                 continue
             x1, y1, x2, y2 = _bbox_to_px(obj.bbox, width, height)
             color = (80, 220, 255)
-            label = _cabin_evidence_label(obj.object_type.value, obj.state.value)
+            label = _cabin_evidence_label(
+                obj.object_type.value,
+                obj.state.value,
+                obj.source,
+                obj.relation_to_driver.value,
+            )
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1)
             cv2.putText(
                 frame,
@@ -416,7 +432,10 @@ def status_dashboard_lines(
             f"L={'ON' if state.vehicle.left_indicator_on else 'OFF'} "
             f"R={'ON' if state.vehicle.right_indicator_on else 'OFF'}",
         ),
+        ("Cabin backend", state.cabin_evidence.detector_backend),
+        ("Cabin objects", str(state.cabin_evidence.cabin_evidence_count)),
         ("Cabin phone", state.cabin_evidence.phone_state.value),
+        ("Cabin phone rel", state.cabin_evidence.phone_relation or "NONE"),
         ("Cabin belt", state.cabin_evidence.seatbelt_state.value),
         ("Cabin smoking", state.cabin_evidence.smoking_state.value),
         ("Cabin affect", "YES" if state.cabin_evidence.affect_final_dms_state else "NO"),
@@ -591,16 +610,28 @@ def _bbox_to_px(bbox: list[float], width: int, height: int) -> tuple[int, int, i
     )
 
 
-def _cabin_evidence_label(object_type: str, lifecycle: str) -> str:
+def _cabin_evidence_label(
+    object_type: str,
+    lifecycle: str,
+    source: str = "",
+    relation: str = "",
+) -> str:
+    prefix = "SYNTH " if source == "synthetic" else ""
     if object_type == "PHONE":
+        if prefix:
+            return f"{prefix}PHONE / {relation or lifecycle}"
         if lifecycle in {"SUSPECTED", "CONFIRMED"}:
             return f"PHONE {lifecycle}"
         return "PHONE CANDIDATE"
     if object_type == "SEATBELT":
+        if prefix:
+            return f"{prefix}SEATBELT / {relation or lifecycle}"
         return "SEATBELT WORN" if lifecycle == "CONFIRMED" else "SEATBELT UNKNOWN"
     if object_type in {"CIGARETTE", "HAND"}:
+        if prefix:
+            return f"{prefix}{object_type} / {relation or lifecycle}"
         return "SMOKING CANDIDATE" if lifecycle == "CANDIDATE" else f"SMOKING {lifecycle}"
-    return "CABIN EVIDENCE"
+    return f"{prefix}CABIN EVIDENCE"
 
 
 def occupant_label(

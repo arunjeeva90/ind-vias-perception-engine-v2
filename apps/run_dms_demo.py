@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,12 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-fps", type=float, default=None)
     parser.add_argument("--keyframe-before-ms", type=int, default=500)
     parser.add_argument("--keyframe-after-ms", type=int, default=500)
+    parser.add_argument("--cabin-evidence-backend", choices=("dummy", "synthetic", "manual"), default=None)
+    parser.add_argument("--cabin-evidence-timeline", default=None)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     config = load_dms_config(args.config)
+    config = _apply_cabin_evidence_overrides(config, args)
     cap = open_video_source(args.video, args.camera)
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
@@ -290,6 +294,17 @@ def _select_output_fps(
     if mode == "camera":
         return max(1.0, float(source_fps or requested_fps or config_fps))
     return max(1.0, float(measured_fps or source_fps or requested_fps or config_fps))
+
+
+def _apply_cabin_evidence_overrides(config, args):
+    if args.cabin_evidence_backend is None and args.cabin_evidence_timeline is None:
+        return config
+    cabin_evidence = dict(config.cabin_evidence or {})
+    if args.cabin_evidence_backend is not None:
+        cabin_evidence["detector_backend"] = args.cabin_evidence_backend
+    if args.cabin_evidence_timeline is not None:
+        cabin_evidence["synthetic_timeline_path"] = args.cabin_evidence_timeline
+    return replace(config, cabin_evidence=cabin_evidence)
 
 
 if __name__ == "__main__":

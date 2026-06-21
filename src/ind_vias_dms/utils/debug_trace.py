@@ -233,7 +233,12 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         "drowsiness": _jsonable(asdict(state.drowsiness)),
         "phone_use": _jsonable(asdict(state.phone_use)),
         "cabin_evidence": _jsonable(asdict(state.cabin_evidence)),
+        "cabin_backend": state.cabin_evidence.detector_backend,
+        "cabin_synthetic_active": state.cabin_evidence.synthetic_active,
         "phone_state": state.cabin_evidence.phone_state.value,
+        "cabin_phone_relation": state.cabin_evidence.phone_relation,
+        "cabin_phone_source": state.cabin_evidence.phone_source,
+        "cabin_phone_confidence": state.cabin_evidence.phone_confidence,
         "seatbelt_state": state.cabin_evidence.seatbelt_state.value,
         "smoking_state": state.cabin_evidence.smoking_state.value,
         "cabin_evidence_count": state.cabin_evidence.cabin_evidence_count,
@@ -260,12 +265,14 @@ def _cabin_event_type(
         return ""
     if prev_phone == "NO_PHONE" and phone == "PHONE_OBJECT_CANDIDATE":
         return "CABIN_PHONE_CANDIDATE_STARTED"
-    if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone in {
-        "PHONE_IN_HAND_SUSPECTED",
-        "PHONE_TO_EAR_SUSPECTED",
-        "PHONE_DOWN_TEXTING_SUSPECTED",
-    }:
-        return "CABIN_PHONE_SUSPECTED"
+    if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_IN_HAND_SUSPECTED":
+        return "CABIN_PHONE_IN_HAND_SUSPECTED"
+    if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_TO_EAR_SUSPECTED":
+        return "CABIN_PHONE_TO_EAR_SUSPECTED"
+    if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_DOWN_TEXTING_SUSPECTED":
+        return "CABIN_PHONE_DOWN_TEXTING_SUSPECTED"
+    if phone == "PHONE_CONFIRMED" and prev_phone != "PHONE_CONFIRMED":
+        return "CABIN_PHONE_CONFIRMED"
     if prev_phone != "NO_PHONE" and phone == "NO_PHONE":
         return "CABIN_PHONE_CLEARED"
     if prev_belt == "SEATBELT_UNKNOWN" and belt in {"SEATBELT_NOT_VISIBLE", "SEATBELT_NOT_WORN_SUSPECTED"}:
@@ -274,7 +281,7 @@ def _cabin_event_type(
         return "CABIN_SEATBELT_WORN_CONFIRMED"
     if prev_smoking == "NO_SMOKING" and smoking == "HAND_TO_MOUTH_CANDIDATE":
         return "CABIN_SMOKING_CANDIDATE_STARTED"
-    if prev_smoking == "HAND_TO_MOUTH_CANDIDATE" and smoking == "SMOKING_SUSPECTED":
+    if smoking == "SMOKING_SUSPECTED" and prev_smoking != "SMOKING_SUSPECTED":
         return "CABIN_SMOKING_SUSPECTED"
     if prev_smoking != "NO_SMOKING" and smoking == "NO_SMOKING":
         return "CABIN_SMOKING_CLEARED"

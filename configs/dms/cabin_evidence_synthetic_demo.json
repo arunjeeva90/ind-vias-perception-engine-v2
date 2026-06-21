@@ -1,0 +1,41 @@
+{
+  "version": "v0.2.5.2",
+  "events": [
+    {
+      "start_ms": 10000,
+      "end_ms": 14000,
+      "object_type": "PHONE",
+      "confidence": 0.92,
+      "bbox": [0.60, 0.42, 0.72, 0.62],
+      "region": "DRIVER",
+      "relation_to_driver": "NEAR_HAND"
+    },
+    {
+      "start_ms": 20000,
+      "end_ms": 25000,
+      "object_type": "PHONE",
+      "confidence": 0.94,
+      "bbox": [0.18, 0.22, 0.32, 0.42],
+      "region": "DRIVER",
+      "relation_to_driver": "NEAR_EAR"
+    },
+    {
+      "start_ms": 0,
+      "end_ms": 60000,
+      "object_type": "SEATBELT",
+      "confidence": 0.88,
+      "bbox": [0.10, 0.35, 0.42, 0.92],
+      "region": "DRIVER",
+      "relation_to_driver": "ACROSS_TORSO"
+    },
+    {
+      "start_ms": 30000,
+      "end_ms": 36000,
+      "object_type": "CIGARETTE",
+      "confidence": 0.82,
+      "bbox": [0.25, 0.30, 0.34, 0.38],
+      "region": "DRIVER",
+      "relation_to_driver": "NEAR_MOUTH"
+    }
+  ]
+}
