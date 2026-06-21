@@ -69,8 +69,13 @@ class CabinEvidenceFusion:
         fused_objects: list[CabinEvidenceObject] = []
         for object_type, obj in raw_by_type.items():
             previous = self._tracks.get(object_type)
-            first_seen = previous.first_seen_ms if previous is not None else timestamp_ms
-            stable_count = (previous.stable_count + 1) if previous is not None else 1
+            same_track = (
+                previous is not None
+                and timestamp_ms - previous.last_seen_ms <= self.temporal_clear_ms
+                and previous.relation_to_driver == obj.relation_to_driver
+            )
+            first_seen = previous.first_seen_ms if same_track and previous is not None else timestamp_ms
+            stable_count = (previous.stable_count + 1) if same_track and previous is not None else 1
             duration_ms = max(0, timestamp_ms - first_seen)
             fused = replace(
                 obj,
@@ -91,12 +96,17 @@ class CabinEvidenceFusion:
             else:
                 fused_objects.append(self._tracks[object_type])
 
+        phone_object = self._active_phone_object(timestamp_ms)
         state = CabinEvidenceState(
             enabled=True,
             detector_backend=self.backend,
             backend_status=backend_status,
+            synthetic_active=any(obj.source == "synthetic" for obj in fused_objects),
             affect_final_dms_state=self.affect_final_dms_state,
             phone_state=self._phone_state(timestamp_ms),
+            phone_relation=phone_object.relation_to_driver.value if phone_object is not None else "NONE",
+            phone_source=phone_object.source if phone_object is not None else "NONE",
+            phone_confidence=phone_object.confidence if phone_object is not None else 0.0,
             seatbelt_state=self._seatbelt_state(timestamp_ms),
             smoking_state=self._smoking_state(timestamp_ms),
             cabin_evidence_count=len(fused_objects),
@@ -136,10 +146,8 @@ class CabinEvidenceFusion:
         return CabinEvidenceLifecycleState.CANDIDATE
 
     def _phone_state(self, timestamp_ms: int) -> CabinPhoneState:
-        phone = self._tracks.get(CabinEvidenceObjectType.PHONE)
+        phone = self._active_phone_object(timestamp_ms)
         if phone is None:
-            return CabinPhoneState.NO_PHONE
-        if timestamp_ms - phone.last_seen_ms > self.temporal_clear_ms:
             return CabinPhoneState.NO_PHONE
         if phone.duration_ms >= self.phone_confirm_ms:
             return CabinPhoneState.PHONE_CONFIRMED
@@ -150,6 +158,14 @@ class CabinEvidenceFusion:
         if phone.relation_to_driver == CabinEvidenceRelation.NEAR_LAP and phone.duration_ms >= self.phone_down_texting_confirm_ms:
             return CabinPhoneState.PHONE_DOWN_TEXTING_SUSPECTED
         return CabinPhoneState.PHONE_OBJECT_CANDIDATE
+
+    def _active_phone_object(self, timestamp_ms: int) -> CabinEvidenceObject | None:
+        phone = self._tracks.get(CabinEvidenceObjectType.PHONE)
+        if phone is None:
+            return None
+        if timestamp_ms - phone.last_seen_ms > self.temporal_clear_ms:
+            return None
+        return phone
 
     def _seatbelt_state(self, timestamp_ms: int) -> CabinSeatbeltState:
         belt = self._tracks.get(CabinEvidenceObjectType.SEATBELT)

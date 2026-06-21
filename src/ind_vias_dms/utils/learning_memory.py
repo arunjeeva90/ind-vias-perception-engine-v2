@@ -25,6 +25,7 @@ class LearningMemoryWriter:
         self.save_crops = save_crops
         self._file = None
         self._asset_dir: Path | None = None
+        self._last_cabin_key: tuple[str, str, str] | None = None
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._file = open(self.path, "a", encoding="utf-8")
@@ -33,7 +34,12 @@ class LearningMemoryWriter:
                 self._asset_dir.mkdir(parents=True, exist_ok=True)
 
     def write_frame(self, state: DMSState, context: dict[str, object], frame: np.ndarray) -> None:
-        if self._file is None or not self._should_record(state):
+        cabin_event_type = self._cabin_transition_event(state)
+        if self._file is None:
+            return
+        should_record = self._should_record(state, cabin_event_type)
+        self._last_cabin_key = self._cabin_key(state)
+        if not should_record:
             return
         keyframe = ""
         if self.save_keyframes and self._asset_dir is not None:
@@ -48,7 +54,7 @@ class LearningMemoryWriter:
             "session_id": state.driver_identity.driver_session_id or "UNKNOWN",
             "frame_id": state.frame_id,
             "timestamp_ms": state.timestamp_ms,
-            "event_type": self._event_type(state),
+            "event_type": self._event_type(state, cabin_event_type),
             "human_label": None,
             "model_decision": state.dms_v02.final_banner,
             "expected_decision": None,
@@ -67,10 +73,15 @@ class LearningMemoryWriter:
             "phone_crop": "",
             "cabin_evidence": {
                 "phone_state": state.cabin_evidence.phone_state.value,
+                "phone_relation": state.cabin_evidence.phone_relation,
+                "phone_source": state.cabin_evidence.phone_source,
+                "phone_confidence": state.cabin_evidence.phone_confidence,
                 "seatbelt_state": state.cabin_evidence.seatbelt_state.value,
                 "smoking_state": state.cabin_evidence.smoking_state.value,
                 "evidence_count": state.cabin_evidence.cabin_evidence_count,
                 "affect_final_dms_state": state.cabin_evidence.affect_final_dms_state,
+                "sources": sorted({obj.source for obj in state.cabin_evidence.evidence_objects}),
+                "synthetic_active": state.cabin_evidence.synthetic_active,
             },
             "review_outputs_supported": [
                 "false_positive_library",
@@ -90,28 +101,19 @@ class LearningMemoryWriter:
             self._file = None
 
     @staticmethod
-    def _should_record(state: DMSState) -> bool:
+    def _should_record(state: DMSState, cabin_event_type: str) -> bool:
         return (
             state.dms_v02.final_banner != "NORMAL"
             or state.phone_use.driver_state not in {"NO_PHONE", "UNKNOWN"}
             or state.vehicle.sanctioned_task_state != "NONE"
             or state.vehicle.dms_alert_suppression_reason
             in {"STANDBY", "STARTUP_INITIALIZING"}
-            or state.cabin_evidence.phone_state.value not in {"NO_PHONE", "PHONE_UNKNOWN"}
-            or state.cabin_evidence.seatbelt_state.value
-            in {"SEATBELT_NOT_WORN_SUSPECTED", "SEATBELT_MISUSE_SUSPECTED"}
-            or (
-                state.cabin_evidence.cabin_evidence_count > 0
-                and state.cabin_evidence.seatbelt_state.value
-                in {"SEATBELT_UNKNOWN", "SEATBELT_NOT_VISIBLE"}
-            )
-            or state.cabin_evidence.smoking_state.value not in {"NO_SMOKING", "SMOKING_UNKNOWN"}
+            or bool(cabin_event_type)
             or state.attention.attention_substate.value
             in {"FACE_LOST", "SIDE_PROFILE_TRACKED", "SIDE_PROFILE_ATTENTION_LOSS"}
         )
 
-    @staticmethod
-    def _event_type(state: DMSState) -> str:
+    def _event_type(self, state: DMSState, cabin_event_type: str = "") -> str:
         reasons = set(
             state.dms_v02.classification_reason_codes
             + state.dms_v02.reason_codes
@@ -122,30 +124,8 @@ class LearningMemoryWriter:
         )
         if "MIRROR_CHECK_ALLOWED" in reasons:
             return "INDICATOR_SANCTIONED_MIRROR_CHECK"
-        if state.cabin_evidence.phone_state.value == "PHONE_OBJECT_CANDIDATE":
-            return "CABIN_PHONE_CANDIDATE"
-        if state.cabin_evidence.phone_state.value in {
-            "PHONE_IN_HAND_SUSPECTED",
-            "PHONE_TO_EAR_SUSPECTED",
-            "PHONE_DOWN_TEXTING_SUSPECTED",
-            "PHONE_CONFIRMED",
-        }:
-            return "CABIN_PHONE_SUSPECTED"
-        if state.cabin_evidence.seatbelt_state.value in {
-            "SEATBELT_NOT_WORN_SUSPECTED",
-            "SEATBELT_MISUSE_SUSPECTED",
-        } or (
-            state.cabin_evidence.cabin_evidence_count > 0
-            and state.cabin_evidence.seatbelt_state.value
-            in {"SEATBELT_UNKNOWN", "SEATBELT_NOT_VISIBLE"}
-        ):
-            return "CABIN_SEATBELT_UNKNOWN"
-        if state.cabin_evidence.smoking_state.value in {
-            "HAND_TO_MOUTH_CANDIDATE",
-            "SMOKING_SUSPECTED",
-            "SMOKING_CONFIRMED",
-        }:
-            return "CABIN_SMOKING_CANDIDATE"
+        if cabin_event_type:
+            return cabin_event_type
         if state.vehicle.dms_alert_suppression_reason in {"STANDBY", "STARTUP_INITIALIZING"}:
             return "DMS_ALERT_SUPPRESSED_SPEED_GATE"
         if state.dms_v02.final_banner == "DMS DEGRADED" and state.attention.attention_substate.value.startswith("SIDE"):
@@ -170,6 +150,45 @@ class LearningMemoryWriter:
         if "ROAD_AXIS_CALIBRATION_UPDATE" in reasons:
             return "ROAD_AXIS_CALIBRATION_UPDATE"
         return state.dms_v02.final_banner.replace(" ", "_")
+
+    def _cabin_transition_event(self, state: DMSState) -> str:
+        current = self._cabin_key(state)
+        previous = self._last_cabin_key or ("NO_PHONE", "SEATBELT_UNKNOWN", "NO_SMOKING")
+        phone, belt, smoking = current
+        prev_phone, prev_belt, prev_smoking = previous
+        if previous == current:
+            return ""
+        if prev_phone == "NO_PHONE" and phone == "PHONE_OBJECT_CANDIDATE":
+            return "CABIN_PHONE_CANDIDATE"
+        if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_IN_HAND_SUSPECTED":
+            return "CABIN_PHONE_IN_HAND_SUSPECTED"
+        if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_TO_EAR_SUSPECTED":
+            return "CABIN_PHONE_TO_EAR_SUSPECTED"
+        if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_DOWN_TEXTING_SUSPECTED":
+            return "CABIN_PHONE_DOWN_TEXTING_SUSPECTED"
+        if phone == "PHONE_CONFIRMED" and prev_phone != "PHONE_CONFIRMED":
+            return "CABIN_PHONE_CONFIRMED"
+        if prev_phone != "NO_PHONE" and phone == "NO_PHONE":
+            return "CABIN_PHONE_CLEARED"
+        if prev_belt == "SEATBELT_UNKNOWN" and belt in {"SEATBELT_NOT_VISIBLE", "SEATBELT_NOT_WORN_SUSPECTED"}:
+            return "CABIN_SEATBELT_UNKNOWN"
+        if prev_belt != "SEATBELT_WORN_CONFIRMED" and belt == "SEATBELT_WORN_CONFIRMED":
+            return "CABIN_SEATBELT_WORN_CONFIRMED"
+        if prev_smoking == "NO_SMOKING" and smoking == "HAND_TO_MOUTH_CANDIDATE":
+            return "CABIN_SMOKING_CANDIDATE"
+        if smoking == "SMOKING_SUSPECTED" and prev_smoking != "SMOKING_SUSPECTED":
+            return "CABIN_SMOKING_SUSPECTED"
+        if prev_smoking != "NO_SMOKING" and smoking == "NO_SMOKING":
+            return "CABIN_SMOKING_CLEARED"
+        return ""
+
+    @staticmethod
+    def _cabin_key(state: DMSState) -> tuple[str, str, str]:
+        return (
+            state.cabin_evidence.phone_state.value,
+            state.cabin_evidence.seatbelt_state.value,
+            state.cabin_evidence.smoking_state.value,
+        )
 
     def _threshold_snapshot(self) -> dict[str, Any]:
         return {
