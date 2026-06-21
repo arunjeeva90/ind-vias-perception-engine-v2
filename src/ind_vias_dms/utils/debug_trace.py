@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import json
@@ -234,6 +234,9 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         "phone_use": _jsonable(asdict(state.phone_use)),
         "cabin_evidence": _jsonable(asdict(state.cabin_evidence)),
         "cabin_backend": state.cabin_evidence.detector_backend,
+        "cabin_backend_status": state.cabin_evidence.backend_status,
+        "cabin_model_path": state.cabin_evidence.model_path,
+        "cabin_class_map_path": state.cabin_evidence.class_map_path,
         "cabin_synthetic_active": state.cabin_evidence.synthetic_active,
         "phone_state": state.cabin_evidence.phone_state.value,
         "cabin_phone_relation": state.cabin_evidence.phone_relation,
@@ -243,6 +246,7 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         "smoking_state": state.cabin_evidence.smoking_state.value,
         "cabin_evidence_count": state.cabin_evidence.cabin_evidence_count,
         "evidence_objects": _jsonable(asdict(state.cabin_evidence).get("evidence_objects", [])),
+        "cabin_evidence_objects": _jsonable(asdict(state.cabin_evidence).get("evidence_objects", [])),
         "affect_final_dms_state": state.cabin_evidence.affect_final_dms_state,
         "distraction": _jsonable(asdict(state.distraction)),
         "attention": _jsonable(asdict(state.attention)),
@@ -296,3 +300,5 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
+
+

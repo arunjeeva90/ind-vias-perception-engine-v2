@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import sys
@@ -54,8 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-fps", type=float, default=None)
     parser.add_argument("--keyframe-before-ms", type=int, default=500)
     parser.add_argument("--keyframe-after-ms", type=int, default=500)
-    parser.add_argument("--cabin-evidence-backend", choices=("dummy", "synthetic", "manual"), default=None)
+    parser.add_argument("--cabin-evidence-backend", choices=("dummy", "synthetic", "manual", "onnx"), default=None)
     parser.add_argument("--cabin-evidence-timeline", default=None)
+    parser.add_argument("--cabin-evidence-model", default=None)
+    parser.add_argument("--cabin-evidence-class-map", default=None)
     return parser
 
 
@@ -297,15 +299,26 @@ def _select_output_fps(
 
 
 def _apply_cabin_evidence_overrides(config, args):
-    if args.cabin_evidence_backend is None and args.cabin_evidence_timeline is None:
+    if (
+        args.cabin_evidence_backend is None
+        and args.cabin_evidence_timeline is None
+        and args.cabin_evidence_model is None
+        and args.cabin_evidence_class_map is None
+    ):
         return config
     cabin_evidence = dict(config.cabin_evidence or {})
     if args.cabin_evidence_backend is not None:
         cabin_evidence["detector_backend"] = args.cabin_evidence_backend
     if args.cabin_evidence_timeline is not None:
         cabin_evidence["synthetic_timeline_path"] = args.cabin_evidence_timeline
+    if args.cabin_evidence_model is not None:
+        cabin_evidence["model_path"] = args.cabin_evidence_model
+    if args.cabin_evidence_class_map is not None:
+        cabin_evidence["class_map_path"] = args.cabin_evidence_class_map
     return replace(config, cabin_evidence=cabin_evidence)
 
 
 if __name__ == "__main__":
     main()
+
+

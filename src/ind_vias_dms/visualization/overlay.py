@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import cv2
 import numpy as np
@@ -433,6 +433,7 @@ def status_dashboard_lines(
             f"R={'ON' if state.vehicle.right_indicator_on else 'OFF'}",
         ),
         ("Cabin backend", state.cabin_evidence.detector_backend),
+        ("Cabin status", state.cabin_evidence.backend_status),
         ("Cabin objects", str(state.cabin_evidence.cabin_evidence_count)),
         ("Cabin phone", state.cabin_evidence.phone_state.value),
         ("Cabin phone rel", state.cabin_evidence.phone_relation or "NONE"),
@@ -616,7 +617,7 @@ def _cabin_evidence_label(
     source: str = "",
     relation: str = "",
 ) -> str:
-    prefix = "SYNTH " if source == "synthetic" else ""
+    prefix = "SYNTH " if source == "synthetic" else ("DET " if source == "onnx" else "")
     if object_type == "PHONE":
         if prefix:
             return f"{prefix}PHONE / {relation or lifecycle}"
@@ -668,3 +669,5 @@ def clamp_endpoint(
     ex = min(max(0, int(round(ex))), width - 1)
     ey = min(max(0, int(round(ey))), height - 1)
     return ex, ey
+
+

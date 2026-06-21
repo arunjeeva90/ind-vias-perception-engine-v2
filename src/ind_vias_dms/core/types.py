@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -346,6 +346,8 @@ class CabinEvidenceState:
     enabled: bool = True
     detector_backend: str = "dummy"
     backend_status: str = "DUMMY"
+    model_path: str = ""
+    class_map_path: str = ""
     synthetic_active: bool = False
     affect_final_dms_state: bool = False
     phone_state: CabinPhoneState = CabinPhoneState.NO_PHONE
@@ -626,3 +628,5 @@ def _enum_to_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_enum_to_value(item) for item in value]
     return value
+
+
