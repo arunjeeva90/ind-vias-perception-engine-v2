@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from argparse import Namespace
 
 import numpy as np
 
+from apps.inspect_cabin_onnx import inspect_model, write_report
 from ind_vias_dms.core.config import DMSConfig
 from ind_vias_dms.core.types import (
     CabinEvidenceObject,
@@ -560,3 +562,130 @@ def test_onnx_overlay_label_uses_det_prefix():
 
     assert label.startswith("DET ")
     assert "NEAR_HAND" in label
+
+
+
+def test_inspect_cabin_onnx_missing_model_writes_report(tmp_path):
+    report_path = tmp_path / "inspection.json"
+    args = Namespace(
+        model=str(tmp_path / "missing.onnx"),
+        class_map="configs/dms/cabin_object_class_map.json",
+        image=None,
+        video=None,
+        frame_index=0,
+        output_json=str(report_path),
+        output_image=None,
+        input_width=640,
+        input_height=640,
+        conf=0.35,
+        nms=0.45,
+        max_detections=50,
+    )
+
+    report = inspect_model(args)
+    write_report(report, args.output_json)
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert payload["backend_status"] == "MODEL_MISSING"
+    assert payload["class_map_loaded"] is True
+    assert payload["class_map_status"] == "CLASS_MAP_READY"
+    assert payload["model_exists"] is False
+    assert payload["parsed_detection_count"] == 0
+    assert "MODEL_MISSING" in payload["warnings"]
+
+
+def test_inspect_cabin_onnx_invalid_class_map_is_safe(tmp_path):
+    bad_map = tmp_path / "bad.json"
+    bad_map.write_text("{not-json", encoding="utf-8")
+    args = Namespace(
+        model=str(tmp_path / "missing.onnx"),
+        class_map=str(bad_map),
+        image=None,
+        video=None,
+        frame_index=0,
+        output_json=None,
+        output_image=None,
+        input_width=640,
+        input_height=640,
+        conf=0.35,
+        nms=0.45,
+        max_detections=50,
+    )
+
+    report = inspect_model(args)
+
+    assert report["class_map_loaded"] is False
+    assert report["class_map_status"] == "CLASS_MAP_INVALID"
+    assert "CLASS_MAP_INVALID" in report["warnings"]
+    assert report["backend_status"] == "MODEL_MISSING"
+
+
+def test_inspect_cabin_onnx_missing_class_map_is_safe(tmp_path):
+    args = Namespace(
+        model=str(tmp_path / "missing.onnx"),
+        class_map=str(tmp_path / "missing_class_map.json"),
+        image=None,
+        video=None,
+        frame_index=0,
+        output_json=None,
+        output_image=None,
+        input_width=640,
+        input_height=640,
+        conf=0.35,
+        nms=0.45,
+        max_detections=50,
+    )
+
+    report = inspect_model(args)
+
+    assert report["backend_status"] == "MODEL_MISSING"
+    assert report["class_map_loaded"] is False
+    assert report["class_map_status"] == "CLASS_MAP_MISSING"
+    assert "CLASS_MAP_MISSING" in report["warnings"]
+
+
+def test_inspect_report_schema_fields_are_stable(tmp_path):
+    args = Namespace(
+        model=str(tmp_path / "missing.onnx"),
+        class_map="configs/dms/cabin_object_class_map.json",
+        image=None,
+        video=None,
+        frame_index=0,
+        output_json=None,
+        output_image=None,
+        input_width=320,
+        input_height=320,
+        conf=0.4,
+        nms=0.5,
+        max_detections=10,
+    )
+
+    report = inspect_model(args)
+
+    for key in {
+        "model_path",
+        "model_exists",
+        "class_map_path",
+        "class_map_loaded",
+        "class_map_status",
+        "backend_status",
+        "input_width",
+        "input_height",
+        "raw_output_shapes",
+        "parsed_detection_count",
+        "detections",
+        "warnings",
+        "errors",
+        "parser_status",
+    }:
+        assert key in report
+
+
+def test_onnx_parser_records_raw_output_shapes():
+    detector = _onnx_detector()
+    output = np.array([[[0.10, 0.20, 0.30, 0.40, 0.90, 0]]], dtype=np.float32)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3))
+
+    assert len(evidence) == 1
+    assert detector.last_raw_output_shapes == [[1, 1, 6]]

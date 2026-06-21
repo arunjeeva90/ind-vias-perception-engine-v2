@@ -45,12 +45,15 @@ class CabinClassMap:
         payload = DEFAULT_CLASS_MAP
         if path:
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8-sig") as f:
                     payload = json.load(f)
                 self.status = "CLASS_MAP_READY"
-            except (OSError, json.JSONDecodeError):
+            except OSError:
                 payload = DEFAULT_CLASS_MAP
                 self.status = "CLASS_MAP_MISSING"
+            except json.JSONDecodeError:
+                payload = DEFAULT_CLASS_MAP
+                self.status = "CLASS_MAP_INVALID"
         self.classes = {str(key): str(value) for key, value in payload.get("classes", {}).items()}
         aliases = dict(DEFAULT_CLASS_MAP.get("aliases", {}))
         aliases.update(payload.get("aliases", {}))
@@ -140,6 +143,7 @@ class CabinObjectDetector:
         )
         self.synthetic_active = False
         self.net = None
+        self.last_raw_output_shapes: list[list[int]] = []
         self.backend_status = "DISABLED" if not self.enabled else "DUMMY_READY"
         if self.enabled and self.backend == "onnx":
             self._load_onnx_model()
@@ -182,6 +186,7 @@ class CabinObjectDetector:
         context: dict[str, Any] | None = None,
     ) -> list[CabinEvidenceObject]:
         output = _first_array(outputs)
+        self.last_raw_output_shapes = _output_shapes(outputs)
         if output is None:
             self.backend_status = "UNSUPPORTED_OUTPUT_SHAPE"
             return []
@@ -401,6 +406,14 @@ def _first_array(outputs: Any) -> np.ndarray | None:
             return None
         return np.asarray(outputs[0])
     return np.asarray(outputs) if outputs is not None else None
+
+
+def _output_shapes(outputs: Any) -> list[list[int]]:
+    if isinstance(outputs, (list, tuple)):
+        return [list(np.asarray(output).shape) for output in outputs]
+    if outputs is None:
+        return []
+    return [list(np.asarray(outputs).shape)]
 
 
 def _clamp_bbox(bbox: list[float]) -> list[float]:
