@@ -67,6 +67,11 @@ class CabinClassMap:
         canonical = self.canonical_name(raw or class_id)
         return _enum_value(CabinEvidenceObjectType, canonical, CabinEvidenceObjectType.UNKNOWN_OBJECT)
 
+    def has_class_id(self, class_id: int | float | str) -> bool:
+        if not _is_number(class_id):
+            return False
+        return str(int(class_id)) in self.classes
+
     def canonical_name(self, raw_value: Any) -> str:
         value = str(raw_value or "").strip()
         if not value:
@@ -132,6 +137,7 @@ class CabinObjectDetector:
         self.nms_iou_threshold = float(evidence_config.get("nms_iou_threshold", 0.45))
         self.max_detections = int(evidence_config.get("max_detections", 50))
         self.normalize_bboxes = bool(evidence_config.get("normalize_bboxes", True))
+        self.allow_unknown_objects = bool(evidence_config.get("allow_unknown_objects", False))
         self.roi_association_enabled = bool(evidence_config.get("roi_association_enabled", True))
         self.relation_inference_enabled = bool(evidence_config.get("relation_inference_enabled", True))
         self.class_map = CabinClassMap(self.class_map_path)
@@ -144,6 +150,8 @@ class CabinObjectDetector:
         self.synthetic_active = False
         self.net = None
         self.last_raw_output_shapes: list[list[int]] = []
+        self.last_parser_format = "NOT_RUN"
+        self.last_yolo_debug = self._empty_yolo_debug("NOT_RUN")
         self.backend_status = "DISABLED" if not self.enabled else "DUMMY_READY"
         if self.enabled and self.backend == "onnx":
             self._load_onnx_model()
@@ -187,35 +195,109 @@ class CabinObjectDetector:
     ) -> list[CabinEvidenceObject]:
         output = _first_array(outputs)
         self.last_raw_output_shapes = _output_shapes(outputs)
+        self.last_parser_format = "NOT_RUN"
+        self.last_yolo_debug = self._empty_yolo_debug("NOT_RUN")
         if output is None:
             self.backend_status = "UNSUPPORTED_OUTPUT_SHAPE"
+            self.last_parser_format = "UNSUPPORTED"
             return []
         output = np.asarray(output, dtype=np.float32)
         if output.ndim == 3 and output.shape[0] == 1:
             output = output[0]
-        if output.ndim != 2 or output.shape[1] < 6:
+        parser_format = self._parser_format_for(output)
+        if parser_format is None:
             self.backend_status = "UNSUPPORTED_OUTPUT_SHAPE"
+            self.last_parser_format = "UNSUPPORTED"
             return []
+        if parser_format == "YOLOV8_CXCYWH_CLASS_SCORES":
+            output = output.T
+            self.last_yolo_debug = self._initial_yolo_debug(output, "channel_first_transposed")
+        self.last_parser_format = parser_format
         height, width = int(frame_shape[0]), int(frame_shape[1])
         detections = []
         for row in output:
-            parsed = self._parse_row(row, width, height)
+            parsed = self._parse_row(row, width, height, parser_format)
             if parsed is None:
                 continue
             bbox, confidence, class_id = parsed
+            is_yolo = parser_format == "YOLOV8_CXCYWH_CLASS_SCORES"
+            if is_yolo and confidence >= self.min_confidence:
+                self.last_yolo_debug["yolo_debug_candidates_above_conf"] += 1
             if confidence < self.min_confidence:
                 continue
+            if not self.allow_unknown_objects and not self.class_map.has_class_id(class_id):
+                continue
+            if is_yolo:
+                self.last_yolo_debug["yolo_debug_candidates_after_class_map_filter"] += 1
             bbox = _clamp_bbox(bbox)
             if not _valid_bbox(bbox):
                 continue
+            if is_yolo:
+                self.last_yolo_debug["yolo_debug_candidates_after_bbox_validation"] += 1
             detections.append((bbox, confidence, class_id))
         detections = _nms(detections, self.nms_iou_threshold, self.max_detections)
+        if parser_format == "YOLOV8_CXCYWH_CLASS_SCORES":
+            self.last_yolo_debug["yolo_debug_candidates_after_nms"] = len(detections)
         evidence = [
             self._to_evidence(bbox, confidence, class_id, timestamp_ms, context or {})
             for bbox, confidence, class_id in detections
         ]
         self.backend_status = "OK"
         return evidence
+
+    def _empty_yolo_debug(self, parser_axis_used: str = "NOT_RUN") -> dict[str, Any]:
+        return {
+            "yolo_debug_total_candidates": 0,
+            "yolo_debug_max_score": 0.0,
+            "yolo_debug_max_class_id": None,
+            "yolo_debug_top_classes_before_filter": [],
+            "yolo_debug_candidates_above_conf": 0,
+            "yolo_debug_candidates_after_class_map_filter": 0,
+            "yolo_debug_candidates_after_bbox_validation": 0,
+            "yolo_debug_candidates_after_nms": 0,
+            "yolo_debug_class_map_keys": sorted(self.class_map.classes.keys(), key=lambda key: (0, int(key)) if key.isdigit() else (1, key)),
+            "yolo_debug_parser_axis_used": parser_axis_used,
+        }
+
+    def _initial_yolo_debug(self, rows: np.ndarray, parser_axis_used: str) -> dict[str, Any]:
+        debug = self._empty_yolo_debug(parser_axis_used)
+        debug["yolo_debug_total_candidates"] = int(rows.shape[0])
+        top: list[dict[str, Any]] = []
+        max_score = -1.0
+        max_class_id: int | None = None
+        for row in rows:
+            if row.shape[0] < 5:
+                continue
+            scores = row[4:]
+            if scores.size == 0:
+                continue
+            class_id = int(np.argmax(scores))
+            score = float(scores[class_id])
+            if score > max_score:
+                max_score = score
+                max_class_id = class_id
+            top.append({
+                "class_id": class_id,
+                "score": score,
+                "bbox_cxcywh": [float(value) for value in row[:4]],
+            })
+        top.sort(key=lambda item: item["score"], reverse=True)
+        debug["yolo_debug_max_score"] = max(0.0, max_score)
+        debug["yolo_debug_max_class_id"] = max_class_id
+        debug["yolo_debug_top_classes_before_filter"] = top[:10]
+        return debug
+
+    def _parser_format_for(self, output: np.ndarray) -> str | None:
+        if output.ndim != 2:
+            return None
+        rows, cols = int(output.shape[0]), int(output.shape[1])
+        if cols == 6:
+            return "N6_XYXY_CONF_CLASS"
+        if rows >= 5 and cols > rows:
+            return "YOLOV8_CXCYWH_CLASS_SCORES"
+        if cols > 6:
+            return "N_5C_OBJECTNESS_CLASS_SCORES"
+        return None
 
     def _load_onnx_model(self) -> None:
         if not self.model_path or not Path(self.model_path).exists():
@@ -259,8 +341,20 @@ class CabinObjectDetector:
         row: np.ndarray,
         width: int,
         height: int,
+        parser_format: str,
     ) -> tuple[list[float], float, int] | None:
-        if row.shape[0] == 6:
+        if parser_format == "YOLOV8_CXCYWH_CLASS_SCORES":
+            if row.shape[0] < 5:
+                return None
+            cx, cy, bw, bh = [float(value) for value in row[:4]]
+            scores = row[4:]
+            if scores.size == 0:
+                return None
+            class_id = int(np.argmax(scores))
+            confidence = float(scores[class_id])
+            bbox = self._normalize_yolo_xywh([cx, cy, bw, bh])
+            return bbox, confidence, class_id
+        if parser_format == "N6_XYXY_CONF_CLASS":
             x1, y1, x2, y2, confidence, class_id = [float(value) for value in row[:6]]
             bbox = self._normalize_xyxy([x1, y1, x2, y2], width, height)
             return bbox, confidence, int(class_id)
@@ -288,6 +382,12 @@ class CabinObjectDetector:
         if not self.normalize_bboxes:
             cx, bw = cx / width, bw / width
             cy, bh = cy / height, bh / height
+        return [cx - bw / 2.0, cy - bh / 2.0, cx + bw / 2.0, cy + bh / 2.0]
+
+    def _normalize_yolo_xywh(self, bbox: list[float]) -> list[float]:
+        cx, cy, bw, bh = bbox
+        cx, bw = cx / max(1.0, float(self.input_width)), bw / max(1.0, float(self.input_width))
+        cy, bh = cy / max(1.0, float(self.input_height)), bh / max(1.0, float(self.input_height))
         return [cx - bw / 2.0, cy - bh / 2.0, cx + bw / 2.0, cy + bh / 2.0]
 
     def _to_evidence(

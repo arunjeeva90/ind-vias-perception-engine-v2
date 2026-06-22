@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 
+import cv2
 import numpy as np
 
-from apps.inspect_cabin_onnx import inspect_model, write_report
+import apps.inspect_cabin_onnx as inspect_app
+from apps.inspect_cabin_onnx import console_summary, inspect_model, write_report
+from apps.sample_dms_frame import sample_frame
 from ind_vias_dms.core.config import DMSConfig
 from ind_vias_dms.core.types import (
     CabinEvidenceObject,
@@ -564,6 +567,115 @@ def test_onnx_overlay_label_uses_det_prefix():
     assert "NEAR_HAND" in label
 
 
+def _coco_phone_class_map(tmp_path):
+    path = tmp_path / "coco_phone_map.json"
+    path.write_text(
+        json.dumps({"version": "test", "classes": {"67": "PHONE"}, "aliases": {"cell phone": "PHONE"}}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _yolov8_output(class_id=67, confidence=0.90, cx=160.0, cy=320.0, bw=128.0, bh=128.0, columns=8400):
+    output = np.zeros((1, 84, columns), dtype=np.float32)
+    output[0, 0, 0] = cx
+    output[0, 1, 0] = cy
+    output[0, 2, 0] = bw
+    output[0, 3, 0] = bh
+    output[0, 4 + class_id, 0] = confidence
+    return output
+
+
+def test_onnx_parser_handles_yolov8_1_84_8400_phone_output(tmp_path):
+    detector = _onnx_detector(class_map_path=str(_coco_phone_class_map(tmp_path)), min_confidence=0.10)
+    output = _yolov8_output(confidence=0.37)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert len(evidence) == 1
+    assert evidence[0].object_type == CabinEvidenceObjectType.PHONE
+    assert np.allclose(evidence[0].bbox, [0.15, 0.40, 0.35, 0.60])
+    assert detector.backend_status == "OK"
+    assert detector.last_parser_format == "YOLOV8_CXCYWH_CLASS_SCORES"
+    assert detector.last_yolo_debug["yolo_debug_max_class_id"] == 67
+    assert detector.last_yolo_debug["yolo_debug_candidates_above_conf"] == 1
+    assert detector.last_yolo_debug["yolo_debug_candidates_after_class_map_filter"] == 1
+    assert detector.last_yolo_debug["yolo_debug_candidates_after_bbox_validation"] == 1
+    assert detector.last_yolo_debug["yolo_debug_candidates_after_nms"] == 1
+
+
+def test_onnx_parser_handles_yolov8_84_8400_phone_output(tmp_path):
+    detector = _onnx_detector(class_map_path=str(_coco_phone_class_map(tmp_path)), min_confidence=0.10)
+    output = _yolov8_output()[0]
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert len(evidence) == 1
+    assert evidence[0].object_type == CabinEvidenceObjectType.PHONE
+    assert detector.last_parser_format == "YOLOV8_CXCYWH_CLASS_SCORES"
+
+
+def test_onnx_yolov8_unmapped_high_confidence_class_is_ignored(tmp_path):
+    detector = _onnx_detector(class_map_path=str(_coco_phone_class_map(tmp_path)))
+    output = _yolov8_output(class_id=10, confidence=0.95)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert evidence == []
+    assert detector.backend_status == "OK"
+
+
+def test_onnx_yolov8_score_037_is_filtered_at_confidence_050(tmp_path):
+    detector = _onnx_detector(class_map_path=str(_coco_phone_class_map(tmp_path)), min_confidence=0.50)
+    output = _yolov8_output(confidence=0.37)
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert evidence == []
+    assert detector.backend_status == "OK"
+
+
+def test_onnx_yolov8_argmax_candidate_must_be_mapped_class(tmp_path):
+    detector = _onnx_detector(class_map_path=str(_coco_phone_class_map(tmp_path)), min_confidence=0.10)
+    output = _yolov8_output(class_id=0, confidence=0.95)
+    output[0, 0, 1] = 448.0
+    output[0, 1, 1] = 320.0
+    output[0, 2, 1] = 128.0
+    output[0, 3, 1] = 128.0
+    output[0, 4 + 67, 1] = 0.37
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 1.0, 1.0]})
+
+    assert len(evidence) == 1
+    assert evidence[0].object_type == CabinEvidenceObjectType.PHONE
+    assert np.allclose(evidence[0].bbox, [0.60, 0.40, 0.80, 0.60])
+    assert detector.last_yolo_debug["yolo_debug_candidates_above_conf"] == 2
+    assert detector.last_yolo_debug["yolo_debug_candidates_after_class_map_filter"] == 1
+
+
+def test_coco_phone_class_map_key_67_maps_without_off_by_one(tmp_path):
+    class_map = CabinClassMap(str(_coco_phone_class_map(tmp_path)))
+
+    assert class_map.has_class_id(67) is True
+    assert class_map.object_type_for(67) == CabinEvidenceObjectType.PHONE
+    assert class_map.has_class_id(66) is False
+    assert class_map.object_type_for(66) == CabinEvidenceObjectType.UNKNOWN_OBJECT
+
+
+def test_onnx_yolov8_duplicate_phone_boxes_are_nms_filtered(tmp_path):
+    detector = _onnx_detector(class_map_path=str(_coco_phone_class_map(tmp_path)), nms_iou_threshold=0.30)
+    output = _yolov8_output()
+    output[0, 0, 1] = 166.0
+    output[0, 1, 1] = 320.0
+    output[0, 2, 1] = 128.0
+    output[0, 3, 1] = 128.0
+    output[0, 4 + 67, 1] = 0.80
+
+    evidence = detector.parse_outputs(output, (100, 100, 3), 100, {"driver_roi_norm": [0.0, 0.0, 0.5, 1.0]})
+
+    assert len(evidence) == 1
+
+
 
 def test_inspect_cabin_onnx_missing_model_writes_report(tmp_path):
     report_path = tmp_path / "inspection.json"
@@ -677,6 +789,17 @@ def test_inspect_report_schema_fields_are_stable(tmp_path):
         "warnings",
         "errors",
         "parser_status",
+        "parser_format",
+        "yolo_debug_total_candidates",
+        "yolo_debug_max_score",
+        "yolo_debug_max_class_id",
+        "yolo_debug_top_classes_before_filter",
+        "yolo_debug_candidates_above_conf",
+        "yolo_debug_candidates_after_class_map_filter",
+        "yolo_debug_candidates_after_bbox_validation",
+        "yolo_debug_candidates_after_nms",
+        "yolo_debug_class_map_keys",
+        "yolo_debug_parser_axis_used",
     }:
         assert key in report
 
@@ -689,3 +812,143 @@ def test_onnx_parser_records_raw_output_shapes():
 
     assert len(evidence) == 1
     assert detector.last_raw_output_shapes == [[1, 1, 6]]
+
+
+
+def test_sample_dms_frame_missing_video_fails_safely(tmp_path):
+    args = Namespace(
+        video=str(tmp_path / "missing.mp4"),
+        camera=None,
+        frame_index=0,
+        time_ms=None,
+        output=str(tmp_path / "frame.jpg"),
+    )
+
+    ok, message, shape = sample_frame(args)
+
+    assert ok is False
+    assert message == "SOURCE_OPEN_FAILED"
+    assert shape is None
+
+
+def test_sample_dms_frame_extracts_tiny_generated_video(tmp_path):
+    video_path = tmp_path / "tiny.mp4"
+    output_path = tmp_path / "frame.jpg"
+    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (16, 12))
+    assert writer.isOpened()
+    writer.write(np.full((12, 16, 3), 127, dtype=np.uint8))
+    writer.release()
+    args = Namespace(video=str(video_path), camera=None, frame_index=0, time_ms=None, output=str(output_path))
+
+    ok, message, shape = sample_frame(args)
+
+    assert ok is True
+    assert message == str(output_path)
+    assert shape == (12, 16, 3)
+    assert output_path.exists()
+
+
+def test_inspect_report_contains_expected_shapes_for_unsupported_parser(tmp_path, monkeypatch):
+    model_path = tmp_path / "candidate.onnx"
+    image_path = tmp_path / "frame.jpg"
+    model_path.write_bytes(b"not-a-real-model")
+    cv2.imwrite(str(image_path), np.zeros((8, 8, 3), dtype=np.uint8))
+
+    class FakeDetector:
+        def __init__(self, config):
+            self.backend_status = "OK"
+            self.last_raw_output_shapes = []
+
+        def detect(self, frame, timestamp_ms, context=None):
+            self.backend_status = "UNSUPPORTED_OUTPUT_SHAPE"
+            self.last_raw_output_shapes = [[1, 3, 7, 9]]
+            return []
+
+    monkeypatch.setattr(inspect_app, "CabinObjectDetector", FakeDetector)
+    args = Namespace(
+        model=str(model_path),
+        class_map="configs/dms/cabin_object_class_map.json",
+        image=str(image_path),
+        video=None,
+        frame_index=0,
+        output_json=None,
+        output_image=None,
+        input_width=640,
+        input_height=640,
+        conf=0.35,
+        nms=0.45,
+        max_detections=50,
+        save_raw_shapes_only=False,
+    )
+
+    report = inspect_model(args)
+
+    assert report["parser_status"] == "UNSUPPORTED_OUTPUT_SHAPE"
+    assert report["raw_output_shapes"] == [[1, 3, 7, 9]]
+    assert "[N,6] as x1,y1,x2,y2,conf,class_id" in report["expected_supported_shapes"]
+    assert "[1,4+C,N] YOLOv8-style output, e.g. [1,84,8400]" in report["expected_supported_shapes"]
+
+
+def test_inspect_no_detections_is_distinct_from_model_missing(tmp_path, monkeypatch):
+    model_path = tmp_path / "candidate.onnx"
+    image_path = tmp_path / "frame.jpg"
+    model_path.write_bytes(b"not-a-real-model")
+    cv2.imwrite(str(image_path), np.zeros((8, 8, 3), dtype=np.uint8))
+
+    class FakeDetector:
+        def __init__(self, config):
+            self.backend_status = "OK"
+            self.last_raw_output_shapes = []
+
+        def detect(self, frame, timestamp_ms, context=None):
+            self.backend_status = "OK"
+            self.last_raw_output_shapes = [[1, 0, 6]]
+            return []
+
+    monkeypatch.setattr(inspect_app, "CabinObjectDetector", FakeDetector)
+    args = Namespace(
+        model=str(model_path),
+        class_map="configs/dms/cabin_object_class_map.json",
+        image=str(image_path),
+        video=None,
+        frame_index=0,
+        output_json=None,
+        output_image=None,
+        input_width=640,
+        input_height=640,
+        conf=0.35,
+        nms=0.45,
+        max_detections=50,
+        save_raw_shapes_only=False,
+    )
+
+    report = inspect_model(args)
+
+    assert report["backend_status"] == "OK"
+    assert report["parser_status"] == "NO_DETECTIONS"
+    assert "MODEL_MISSING" not in report["warnings"]
+
+
+def test_console_summary_includes_missing_model_status(tmp_path):
+    args = Namespace(
+        model=str(tmp_path / "missing.onnx"),
+        class_map="configs/dms/cabin_object_class_map.json",
+        image=None,
+        video=None,
+        frame_index=0,
+        output_json=None,
+        output_image=None,
+        input_width=640,
+        input_height=640,
+        conf=0.35,
+        nms=0.45,
+        max_detections=50,
+        save_raw_shapes_only=False,
+    )
+
+    summary = console_summary(inspect_model(args))
+
+    assert "Cabin ONNX Inspection" in summary
+    assert "Model exists: NO" in summary
+    assert "Backend status: MODEL_MISSING" in summary
+    assert "Parser format:" in summary
