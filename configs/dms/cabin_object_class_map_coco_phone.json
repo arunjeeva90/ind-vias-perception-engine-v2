@@ -1,0 +1,11 @@
+{
+  "version": "v0.2.8-coco-phone-test",
+  "classes": {
+    "67": "PHONE"
+  },
+  "aliases": {
+    "cell phone": "PHONE",
+    "mobile": "PHONE",
+    "mobile phone": "PHONE"
+  }
+}
