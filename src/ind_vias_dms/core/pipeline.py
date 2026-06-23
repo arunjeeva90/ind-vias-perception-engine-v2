@@ -55,7 +55,7 @@ from ind_vias_dms.vision.gaze import GazeEstimate, GazeEstimator
 from ind_vias_dms.vision.head_pose import HeadPose, HeadPoseEstimator
 from ind_vias_dms.vision.cabin_object_detection import CabinObjectDetector
 from ind_vias_dms.vision.phone_detection import MobileDistractionEstimator
-from ind_vias_dms.vision.seatbelt import SeatbeltDetectionPlaceholder
+from ind_vias_dms.vision.seatbelt import SeatbeltDetectionModule
 
 
 DOWNWARD_GAZE_ZONES = {GazeZone.DOWN, GazeZone.PHONE_DOWN}
@@ -89,7 +89,7 @@ class DMSPipeline:
         self.phone_detector = MobileDistractionEstimator(config)
         self.cabin_object_detector = CabinObjectDetector(config)
         self.cabin_evidence_fusion = CabinEvidenceFusion(config)
-        self.seatbelt_detector = SeatbeltDetectionPlaceholder()
+        self.seatbelt_detector = SeatbeltDetectionModule(config)
         self.fps_meter = FPSMeter()
         self.no_face_since_ms: int | None = None
         self.eyes_off_road_since_ms: int | None = None
@@ -695,7 +695,7 @@ class DMSPipeline:
             attention=attention,
             dms_v02=v02,
             occupancy=occupancy,
-            seatbelt_authenticity=self.seatbelt_detector.process(frame),
+            seatbelt_authenticity=self.seatbelt_detector.process(frame, cabin_evidence_state=cabin_evidence, timestamp_ms=timestamp_ms),
             cabin_evidence=cabin_evidence,
             driver_readiness_score=readiness,
         )
