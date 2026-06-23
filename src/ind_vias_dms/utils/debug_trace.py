@@ -239,9 +239,50 @@ def build_debug_record(state: DMSState, context: dict[str, object], frame: np.nd
         "cabin_class_map_path": state.cabin_evidence.class_map_path,
         "cabin_synthetic_active": state.cabin_evidence.synthetic_active,
         "phone_state": state.cabin_evidence.phone_state.value,
+        "cabin_phone_observed": state.cabin_evidence.cabin_phone_observed,
+        "cabin_phone_observed_count": state.cabin_evidence.cabin_phone_observed_count,
+        "cabin_phone_observed_regions": state.cabin_evidence.cabin_phone_observed_regions,
         "cabin_phone_relation": state.cabin_evidence.phone_relation,
         "cabin_phone_source": state.cabin_evidence.phone_source,
         "cabin_phone_confidence": state.cabin_evidence.phone_confidence,
+        "driver_phone_state": state.cabin_evidence.driver_phone_state.value,
+        "driver_roi_phone": state.cabin_evidence.driver_roi_phone,
+        "phone_scenario": state.cabin_evidence.phone_scenario,
+        "phone_driver_roi_hit": state.cabin_evidence.phone_driver_roi_hit,
+        "phone_inside_driver_roi": state.cabin_evidence.phone_inside_driver_roi,
+        "phone_track_confidence_smoothed": state.cabin_evidence.phone_track_confidence_smoothed,
+        "phone_track_fresh_this_frame": state.cabin_evidence.phone_track_fresh_this_frame,
+        "phone_track_held": state.cabin_evidence.phone_track_held,
+        "phone_track_gap_ms": state.cabin_evidence.phone_track_gap_ms,
+        "phone_to_ear_geometry_valid": state.cabin_evidence.phone_to_ear_geometry_valid,
+        "phone_to_ear_geometry_reason": state.cabin_evidence.phone_to_ear_geometry_reason,
+        "phone_behavior_support": state.cabin_evidence.phone_behavior_support,
+        "phone_behavior_support_reason": state.cabin_evidence.phone_behavior_support_reason,
+        "phone_to_ear_active": state.cabin_evidence.phone_to_ear_active,
+        "phone_distraction_active": state.cabin_evidence.phone_distraction_active,
+        "phone_box_source": state.cabin_evidence.phone_box_source,
+        "phone_outside_driver_roi_detected": state.cabin_evidence.phone_outside_driver_roi_detected,
+        "phone_overlay_label": state.cabin_evidence.phone_overlay_label,
+        "phone_overlay_drawn": state.cabin_evidence.phone_overlay_drawn,
+        "status_page_index": state.cabin_evidence.status_page_index,
+        "driver_phone_relation": state.cabin_evidence.driver_phone_relation,
+        "driver_phone_confidence": state.cabin_evidence.driver_phone_confidence,
+        "driver_phone_source": state.cabin_evidence.driver_phone_source,
+        "driver_phone_relevant_count": state.cabin_evidence.driver_phone_relevant_count,
+        "driver_phone_pre_candidate": state.cabin_evidence.driver_phone_pre_candidate,
+        "driver_phone_track_age_ms": state.cabin_evidence.driver_phone_track_age_ms,
+        "driver_phone_consecutive_frames": state.cabin_evidence.driver_phone_consecutive_frames,
+        "driver_phone_last_seen_ms": state.cabin_evidence.driver_phone_last_seen_ms,
+        "driver_phone_stale_hold_active": state.cabin_evidence.driver_phone_stale_hold_active,
+        "driver_phone_relation_geometry_valid": state.cabin_evidence.driver_phone_relation_geometry_valid,
+        "driver_phone_relation_geometry_reason": state.cabin_evidence.driver_phone_relation_geometry_reason,
+        "driver_phone_relation_threshold_used": state.cabin_evidence.driver_phone_relation_threshold_used,
+        "overlay_phone_semantic_level": state.cabin_evidence.overlay_phone_semantic_level,
+        "overlay_phone_hidden_duplicate_count": state.cabin_evidence.overlay_phone_hidden_duplicate_count,
+        "current_driver_phone_relevant_count": state.cabin_evidence.current_driver_phone_relevant_count,
+        "current_ignored_phone_count": state.cabin_evidence.current_ignored_phone_count,
+        "ignored_phone_count": state.cabin_evidence.ignored_phone_count,
+        "ignored_phone_reasons": state.cabin_evidence.ignored_phone_reasons,
         "seatbelt_state": state.cabin_evidence.seatbelt_state.value,
         "smoking_state": state.cabin_evidence.smoking_state.value,
         "cabin_evidence_count": state.cabin_evidence.cabin_evidence_count,
@@ -268,17 +309,17 @@ def _cabin_event_type(
     if prev_phone == phone and prev_belt == belt and prev_smoking == smoking:
         return ""
     if prev_phone == "NO_PHONE" and phone == "PHONE_OBJECT_CANDIDATE":
-        return "CABIN_PHONE_CANDIDATE_STARTED"
-    if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_IN_HAND_SUSPECTED":
-        return "CABIN_PHONE_IN_HAND_SUSPECTED"
+        return "PHONE_IN_DRIVER_ROI_STARTED"
+    if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone in {"PHONE_DISTRACTION", "PHONE_IN_HAND_SUSPECTED", "PHONE_DOWN_TEXTING_SUSPECTED"}:
+        return "PHONE_DISTRACTION_STARTED"
     if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_TO_EAR_SUSPECTED":
-        return "CABIN_PHONE_TO_EAR_SUSPECTED"
+        return "PHONE_TO_EAR_STARTED"
     if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_DOWN_TEXTING_SUSPECTED":
-        return "CABIN_PHONE_DOWN_TEXTING_SUSPECTED"
+        return "PHONE_DISTRACTION_STARTED"
     if phone == "PHONE_CONFIRMED" and prev_phone != "PHONE_CONFIRMED":
-        return "CABIN_PHONE_CONFIRMED"
+        return "PHONE_DISTRACTION_STARTED"
     if prev_phone != "NO_PHONE" and phone == "NO_PHONE":
-        return "CABIN_PHONE_CLEARED"
+        return "PHONE_CLEARED"
     if prev_belt == "SEATBELT_UNKNOWN" and belt in {"SEATBELT_NOT_VISIBLE", "SEATBELT_NOT_WORN_SUSPECTED"}:
         return "CABIN_SEATBELT_UNKNOWN"
     if prev_belt != "SEATBELT_WORN_CONFIRMED" and belt == "SEATBELT_WORN_CONFIRMED":
@@ -300,5 +341,7 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
+
+
 
 

@@ -138,6 +138,7 @@ class CabinEvidenceLifecycleState(StableStrEnum):
 class CabinPhoneState(StableStrEnum):
     NO_PHONE = "NO_PHONE"
     PHONE_OBJECT_CANDIDATE = "PHONE_OBJECT_CANDIDATE"
+    PHONE_DISTRACTION = "PHONE_DISTRACTION"
     PHONE_IN_HAND_SUSPECTED = "PHONE_IN_HAND_SUSPECTED"
     PHONE_TO_EAR_SUSPECTED = "PHONE_TO_EAR_SUSPECTED"
     PHONE_DOWN_TEXTING_SUSPECTED = "PHONE_DOWN_TEXTING_SUSPECTED"
@@ -350,10 +351,67 @@ class CabinEvidenceState:
     class_map_path: str = ""
     synthetic_active: bool = False
     affect_final_dms_state: bool = False
+    cabin_phone_observed: bool = False
+    cabin_phone_observed_count: int = 0
+    cabin_phone_observed_regions: list[str] = field(default_factory=list)
     phone_state: CabinPhoneState = CabinPhoneState.NO_PHONE
     phone_relation: str = "NONE"
     phone_source: str = "NONE"
     phone_confidence: float = 0.0
+    driver_phone_state: CabinPhoneState = CabinPhoneState.NO_PHONE
+    phone_scenario: str = "NONE"
+    driver_roi_phone: bool = False
+    phone_driver_roi_hit: bool = False
+    phone_inside_driver_roi: bool = False
+    phone_track_confidence_smoothed: float = 0.0
+    phone_track_fresh_this_frame: bool = False
+    phone_track_held: bool = False
+    phone_track_gap_ms: int = 0
+    phone_to_ear_geometry_valid: bool = False
+    phone_to_ear_geometry_reason: str = "UNKNOWN"
+    phone_behavior_support: bool = False
+    phone_behavior_support_reason: str = "NONE"
+    phone_to_ear_active: bool = False
+    phone_distraction_active: bool = False
+    phone_box_source: str = "NONE"
+    phone_outside_driver_roi_detected: bool = False
+    phone_overlay_label: str = ""
+    phone_overlay_drawn: bool = False
+    status_page_index: int = 1
+    driver_phone_relation: str = "NONE"
+    driver_phone_confidence: float = 0.0
+    driver_phone_source: str = "NONE"
+    driver_phone_relevant_count: int = 0
+    driver_phone_pre_candidate: bool = False
+    driver_phone_track_age_ms: int = 0
+    driver_phone_consecutive_frames: int = 0
+    driver_phone_last_seen_ms: int = 0
+    driver_phone_stale_hold_active: bool = False
+    phone_raw_detected_this_frame: bool = False
+    driver_phone_fresh_this_frame: bool = False
+    driver_phone_track_held: bool = False
+    driver_phone_last_raw_seen_ms: int = 0
+    driver_phone_track_hold_remaining_ms: int = 0
+    driver_phone_track_gap_ms: int = 0
+    driver_phone_track_signature: str = ""
+    driver_phone_track_reset_reason: str = ""
+    driver_phone_visual_plausibility_score: float = 1.0
+    driver_phone_visual_plausibility_reason: str = "OK"
+    driver_phone_relation_geometry_valid: bool = False
+    driver_phone_relation_geometry_reason: str = "UNKNOWN"
+    driver_phone_relation_threshold_used: float = 0.0
+    overlay_phone_semantic_level: str = "NONE"
+    overlay_phone_hidden_duplicate_count: int = 0
+    overlay_phone_drawn_count: int = 0
+    overlay_phone_drawn_labels: list[str] = field(default_factory=list)
+    overlay_phone_drawn_boxes: list[list[float]] = field(default_factory=list)
+    overlay_phone_suppressed_duplicates: int = 0
+    overlay_phone_track_label: str = ""
+    overlay_phone_track_is_held: bool = False
+    current_driver_phone_relevant_count: int = 0
+    current_ignored_phone_count: int = 0
+    ignored_phone_count: int = 0
+    ignored_phone_reasons: list[str] = field(default_factory=list)
     seatbelt_state: CabinSeatbeltState = CabinSeatbeltState.SEATBELT_UNKNOWN
     smoking_state: CabinSmokingState = CabinSmokingState.NO_SMOKING
     cabin_evidence_count: int = 0
@@ -628,5 +686,7 @@ def _enum_to_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_enum_to_value(item) for item in value]
     return value
+
+
 
 

@@ -133,13 +133,17 @@ class CabinObjectDetector:
         self.class_map_path = str(evidence_config.get("class_map_path", ""))
         self.input_width = int(evidence_config.get("input_width", 640))
         self.input_height = int(evidence_config.get("input_height", 640))
-        self.min_confidence = float(evidence_config.get("min_confidence", 0.35))
+        self.min_confidence = float(evidence_config.get("raw_phone_min_confidence", evidence_config.get("min_confidence", 0.35)))
         self.nms_iou_threshold = float(evidence_config.get("nms_iou_threshold", 0.45))
         self.max_detections = int(evidence_config.get("max_detections", 50))
         self.normalize_bboxes = bool(evidence_config.get("normalize_bboxes", True))
         self.allow_unknown_objects = bool(evidence_config.get("allow_unknown_objects", False))
         self.roi_association_enabled = bool(evidence_config.get("roi_association_enabled", True))
         self.relation_inference_enabled = bool(evidence_config.get("relation_inference_enabled", True))
+        self.near_ear_face_x_margin = float(evidence_config.get("phone_to_ear_face_x_margin", evidence_config.get("near_ear_face_x_margin", 0.35)))
+        self.near_ear_face_y_margin_top = float(evidence_config.get("phone_to_ear_face_y_margin_top", evidence_config.get("near_ear_face_y_margin_top", 0.30)))
+        self.near_ear_face_y_margin_bottom = float(evidence_config.get("phone_to_ear_face_y_margin_bottom", evidence_config.get("near_ear_face_y_margin_bottom", 0.65)))
+        self.near_ear_max_below_face = float(evidence_config.get("phone_to_ear_max_below_face", evidence_config.get("near_ear_max_below_face", 0.45)))
         self.class_map = CabinClassMap(self.class_map_path)
         self.synthetic_timeline_path = str(evidence_config.get("synthetic_timeline_path", ""))
         self.synthetic_default_confidence = float(evidence_config.get("synthetic_default_confidence", 0.90))
@@ -214,6 +218,8 @@ class CabinObjectDetector:
             self.last_yolo_debug = self._initial_yolo_debug(output, "channel_first_transposed")
         self.last_parser_format = parser_format
         height, width = int(frame_shape[0]), int(frame_shape[1])
+        context = dict(context or {})
+        context["_frame_shape"] = frame_shape
         detections = []
         for row in output:
             parsed = self._parse_row(row, width, height, parser_format)
@@ -438,10 +444,9 @@ class CabinObjectDetector:
         driver_roi = _context_roi(context) or [0.0, 0.0, 0.5, 1.0]
         _, ry1, _, ry2 = driver_roi
         rh = max(0.01, ry2 - ry1)
-        upper_driver = ry1 + 0.42 * rh
         lower_driver = ry1 + 0.68 * rh
         if object_type == CabinEvidenceObjectType.PHONE:
-            if region == CabinEvidenceRegion.DRIVER and cy <= upper_driver:
+            if region == CabinEvidenceRegion.DRIVER and self._is_near_driver_ear(bbox, context):
                 return CabinEvidenceRelation.NEAR_EAR
             if region == CabinEvidenceRegion.DRIVER and cy >= lower_driver:
                 return CabinEvidenceRelation.NEAR_LAP
@@ -454,6 +459,27 @@ class CabinObjectDetector:
         if object_type == CabinEvidenceObjectType.HAND and region == CabinEvidenceRegion.DRIVER:
             return CabinEvidenceRelation.NEAR_HAND
         return CabinEvidenceRelation.UNKNOWN
+
+    def _is_near_driver_ear(self, bbox: list[float], context: dict[str, Any]) -> bool:
+        face_bbox = _context_face_bbox_norm(context)
+        if face_bbox is None:
+            return False
+        cx, cy = _bbox_center(bbox)
+        fx1, fy1, fx2, fy2 = face_bbox
+        face_width = max(0.01, fx2 - fx1)
+        face_height = max(0.01, fy2 - fy1)
+        x_min = max(0.0, fx1 - self.near_ear_face_x_margin * face_width)
+        x_max = min(1.0, fx2 + self.near_ear_face_x_margin * face_width)
+        y_min = max(0.0, fy1 - self.near_ear_face_y_margin_top * face_height)
+        y_max = min(1.0, fy2 + self.near_ear_face_y_margin_bottom * face_height)
+        if not (x_min <= cx <= x_max and y_min <= cy <= y_max):
+            return False
+        if cy > fy2 + self.near_ear_max_below_face * face_height:
+            return False
+        near_left_edge = abs(cx - fx1) <= self.near_ear_face_x_margin * face_width
+        near_right_edge = abs(cx - fx2) <= self.near_ear_face_x_margin * face_width
+        horizontally_adjacent = cx < fx1 or cx > fx2 or near_left_edge or near_right_edge
+        return horizontally_adjacent
 
 
 def _event_to_object(
@@ -537,6 +563,25 @@ def _point_in_bbox(x: float, y: float, bbox: list[float]) -> bool:
     return x1 <= x <= x2 and y1 <= y <= y2
 
 
+
+def _context_face_bbox_norm(context: dict[str, Any]) -> list[float] | None:
+    face = context.get("driver_face")
+    bbox = getattr(face, "bbox", None)
+    if bbox is None:
+        return None
+    values = [float(value) for value in bbox[:4]]
+    if len(values) != 4:
+        return None
+    if max(abs(value) for value in values) <= 1.5:
+        return values
+    shape = context.get("_frame_shape")
+    if isinstance(shape, (list, tuple)) and len(shape) >= 2:
+        height, width = float(shape[0]), float(shape[1])
+        if width > 0.0 and height > 0.0:
+            x1, y1, x2, y2 = values
+            return [x1 / width, y1 / height, x2 / width, y2 / height]
+    return None
+
 def _context_roi(context: dict[str, Any]) -> list[float] | None:
     roi = context.get("driver_roi_norm")
     if isinstance(roi, (list, tuple)) and len(roi) >= 4:
@@ -573,3 +618,5 @@ def _iou(a: list[float], b: list[float]) -> float:
     area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
     union = area_a + area_b - intersection
     return intersection / union if union > 0.0 else 0.0
+
+
