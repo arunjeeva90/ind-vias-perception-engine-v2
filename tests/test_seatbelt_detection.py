@@ -192,7 +192,7 @@ class TestSeatbeltNotWornSuspected:
         assert result.confidence > 0.0
 
     def test_seatbelt_not_worn_requires_driver_present(self):
-        """When driver presence is required and cabin evidence is disabled, return UNKNOWN."""
+        """When driver presence is required and driver_present is False, return UNKNOWN."""
         config = _make_config(
             seatbelt_not_worn_absence_ms=5000,
             seatbelt_not_worn_requires_driver_present=True,
@@ -201,12 +201,15 @@ class TestSeatbeltNotWornSuspected:
         frame = _make_frame()
         cabin_evidence = _make_cabin_evidence(
             seatbelt_state=CabinSeatbeltState.SEATBELT_UNKNOWN,
-            enabled=False,
+            enabled=True,
         )
 
-        # Even after long time, should remain UNKNOWN if driver presence not confirmed
+        # Even after long time, should remain UNKNOWN if driver not present
         for t in range(0, 20000, 100):
-            result = module.process(frame, cabin_evidence_state=cabin_evidence, timestamp_ms=t)
+            result = module.process(
+                frame, cabin_evidence_state=cabin_evidence,
+                timestamp_ms=t, driver_present=False,
+            )
 
         assert result.final_state == "UNKNOWN"
 
@@ -417,3 +420,202 @@ class TestSeatbeltBuckleSwitch:
             cabin_evidence = _make_cabin_evidence(seatbelt_state=state)
             result = module.process(frame, cabin_evidence_state=cabin_evidence, timestamp_ms=1000)
             assert result.buckle_switch == "UNKNOWN"
+
+
+class TestSeatbeltStateTransitions:
+    """Tests for state transitions (worn -> removed -> not-worn-suspected)."""
+
+    def test_seatbelt_worn_then_removed_becomes_not_worn_suspected(self):
+        """After seatbelt is confirmed worn and then removed, module transitions to NOT_WORN_SUSPECTED.
+
+        This exercises the critical path: WORN_CONFIRMED -> seatbelt removed ->
+        enough time passes -> NOT_WORN_SUSPECTED.
+        """
+        config = _make_config(seatbelt_not_worn_absence_ms=5000)
+        module = SeatbeltDetectionModule(config)
+        frame = _make_frame()
+
+        # Phase 1: Seatbelt is worn for several seconds
+        cabin_evidence_worn = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_WORN_CONFIRMED,
+            evidence_objects=[
+                CabinEvidenceObject(
+                    object_type=CabinEvidenceObjectType.SEATBELT,
+                    relation_to_driver=CabinEvidenceRelation.ACROSS_TORSO,
+                    confidence=0.8,
+                )
+            ],
+        )
+        for t in range(0, 5000, 100):
+            result = module.process(frame, cabin_evidence_state=cabin_evidence_worn, timestamp_ms=t)
+
+        assert result.final_state == "WORN_CONFIRMED"
+        assert result.confidence >= 0.6
+
+        # Phase 2: Driver unbuckles - seatbelt is no longer visible
+        cabin_evidence_removed = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_NOT_VISIBLE,
+            enabled=True,
+        )
+
+        # Initially after removal, state should be NOT_VISIBLE (not enough time)
+        result = module.process(
+            frame, cabin_evidence_state=cabin_evidence_removed,
+            timestamp_ms=5100, driver_present=True,
+        )
+        assert result.final_state == "NOT_VISIBLE"
+
+        # Phase 3: Enough time passes without seatbelt being seen
+        for t in range(5200, 12000, 100):
+            result = module.process(
+                frame, cabin_evidence_state=cabin_evidence_removed,
+                timestamp_ms=t, driver_present=True,
+            )
+
+        # After absence_ms elapsed since last seatbelt seen, should escalate
+        assert result.final_state == "NOT_WORN_SUSPECTED"
+        assert result.confidence > 0.0
+
+    def test_seatbelt_worn_then_removed_unknown_state(self):
+        """Seatbelt worn then cabin evidence goes to UNKNOWN triggers absence detection."""
+        config = _make_config(seatbelt_not_worn_absence_ms=3000)
+        module = SeatbeltDetectionModule(config)
+        frame = _make_frame()
+
+        # Phase 1: Seatbelt is worn
+        cabin_evidence_worn = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_WORN_CONFIRMED,
+            evidence_objects=[
+                CabinEvidenceObject(
+                    object_type=CabinEvidenceObjectType.SEATBELT,
+                    relation_to_driver=CabinEvidenceRelation.ACROSS_TORSO,
+                    confidence=0.8,
+                )
+            ],
+        )
+        for t in range(0, 2000, 100):
+            module.process(frame, cabin_evidence_state=cabin_evidence_worn, timestamp_ms=t)
+
+        # Phase 2: Cabin evidence goes to UNKNOWN (belt removed)
+        cabin_evidence_unknown = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_UNKNOWN,
+            enabled=True,
+        )
+        for t in range(2000, 8000, 100):
+            result = module.process(
+                frame, cabin_evidence_state=cabin_evidence_unknown,
+                timestamp_ms=t, driver_present=True,
+            )
+
+        # Should eventually detect not-worn
+        assert result.final_state == "NOT_WORN_SUSPECTED"
+
+
+class TestSeatbeltReset:
+    """Tests for the reset() method."""
+
+    def test_reset_clears_state(self):
+        """reset() clears internal state so the module behaves as fresh."""
+        config = _make_config(seatbelt_not_worn_absence_ms=5000)
+        module = SeatbeltDetectionModule(config)
+        frame = _make_frame()
+
+        # Build up state
+        cabin_evidence_worn = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_WORN_CONFIRMED,
+            evidence_objects=[
+                CabinEvidenceObject(
+                    object_type=CabinEvidenceObjectType.SEATBELT,
+                    relation_to_driver=CabinEvidenceRelation.ACROSS_TORSO,
+                    confidence=0.8,
+                )
+            ],
+        )
+        for t in range(0, 3000, 100):
+            module.process(frame, cabin_evidence_state=cabin_evidence_worn, timestamp_ms=t)
+
+        assert module._seatbelt_seen_count > 0
+        assert module._last_seatbelt_seen_ms is not None
+
+        # Reset the module
+        module.reset()
+
+        assert module._first_frame_ms is None
+        assert module._last_seatbelt_seen_ms is None
+        assert module._seatbelt_seen_count == 0
+
+    def test_reset_allows_fresh_absence_detection(self):
+        """After reset, absence detection works from scratch again."""
+        config = _make_config(seatbelt_not_worn_absence_ms=5000)
+        module = SeatbeltDetectionModule(config)
+        frame = _make_frame()
+
+        # Build up worn state
+        cabin_evidence_worn = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_WORN_CONFIRMED,
+            evidence_objects=[
+                CabinEvidenceObject(
+                    object_type=CabinEvidenceObjectType.SEATBELT,
+                    relation_to_driver=CabinEvidenceRelation.ACROSS_TORSO,
+                    confidence=0.8,
+                )
+            ],
+        )
+        for t in range(0, 3000, 100):
+            module.process(frame, cabin_evidence_state=cabin_evidence_worn, timestamp_ms=t)
+
+        # Reset (simulating driver change)
+        module.reset()
+
+        # Now feed unknown evidence - should eventually trigger not-worn
+        cabin_evidence_unknown = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_UNKNOWN,
+            enabled=True,
+        )
+        for t in range(10000, 20000, 100):
+            result = module.process(
+                frame, cabin_evidence_state=cabin_evidence_unknown,
+                timestamp_ms=t, driver_present=True,
+            )
+
+        assert result.final_state == "NOT_WORN_SUSPECTED"
+
+    def test_driver_present_false_prevents_absence_detection(self):
+        """When driver_present is False, absence detection does not fire."""
+        config = _make_config(
+            seatbelt_not_worn_absence_ms=5000,
+            seatbelt_not_worn_requires_driver_present=True,
+        )
+        module = SeatbeltDetectionModule(config)
+        frame = _make_frame()
+        cabin_evidence = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_UNKNOWN,
+            enabled=True,
+        )
+
+        # Even after long time, with driver_present=False, stays UNKNOWN
+        for t in range(0, 20000, 100):
+            result = module.process(
+                frame, cabin_evidence_state=cabin_evidence,
+                timestamp_ms=t, driver_present=False,
+            )
+
+        assert result.final_state == "UNKNOWN"
+
+    def test_driver_present_true_enables_absence_detection(self):
+        """When driver_present is True (default), absence detection works."""
+        config = _make_config(seatbelt_not_worn_absence_ms=5000)
+        module = SeatbeltDetectionModule(config)
+        frame = _make_frame()
+        cabin_evidence = _make_cabin_evidence(
+            seatbelt_state=CabinSeatbeltState.SEATBELT_UNKNOWN,
+            enabled=True,
+        )
+
+        for t in range(0, 10000, 100):
+            result = module.process(
+                frame, cabin_evidence_state=cabin_evidence,
+                timestamp_ms=t, driver_present=True,
+            )
+
+        assert result.final_state == "NOT_WORN_SUSPECTED"

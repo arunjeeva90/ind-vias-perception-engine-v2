@@ -695,7 +695,7 @@ class DMSPipeline:
             attention=attention,
             dms_v02=v02,
             occupancy=occupancy,
-            seatbelt_authenticity=self.seatbelt_detector.process(frame, cabin_evidence_state=cabin_evidence, timestamp_ms=timestamp_ms),
+            seatbelt_authenticity=self.seatbelt_detector.process(frame, cabin_evidence_state=cabin_evidence, timestamp_ms=timestamp_ms, driver_present=face.face_found or body_state.state == "PRESENT"),
             cabin_evidence=cabin_evidence,
             driver_readiness_score=readiness,
         )

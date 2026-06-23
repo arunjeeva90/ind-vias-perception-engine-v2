@@ -50,11 +50,23 @@ class SeatbeltDetectionModule:
         self._last_seatbelt_seen_ms: int | None = None
         self._seatbelt_seen_count: int = 0
 
+    def reset(self) -> None:
+        """Reset internal state for a new driver session or scene change.
+
+        Should be called when the driver changes, leaves the seat, or a new
+        session begins. This prevents stale history from contaminating the
+        confidence score and absence timer.
+        """
+        self._first_frame_ms = None
+        self._last_seatbelt_seen_ms = None
+        self._seatbelt_seen_count = 0
+
     def process(
         self,
         frame: np.ndarray | object,
         cabin_evidence_state: CabinEvidenceState | None = None,
         timestamp_ms: int = 0,
+        driver_present: bool = True,
     ) -> SeatbeltAuthenticity:
         """Analyze seatbelt state based on cabin evidence fusion output.
 
@@ -63,6 +75,9 @@ class SeatbeltDetectionModule:
             cabin_evidence_state: The current CabinEvidenceState from temporal
                 fusion, containing the tracked seatbelt_state.
             timestamp_ms: Current frame timestamp in milliseconds.
+            driver_present: Whether the driver is currently detected as present
+                (face found or body present). Used for absence-based not-worn
+                detection. Defaults to True for backward compatibility.
 
         Returns:
             SeatbeltAuthenticity with buckle_switch, visual_belt_path,
@@ -97,7 +112,8 @@ class SeatbeltDetectionModule:
 
         # Determine final state and confidence
         final_state, confidence = self._classify_state(
-            seatbelt_state, cabin_evidence_state, timestamp_ms, visual_belt_path
+            seatbelt_state, cabin_evidence_state, timestamp_ms, visual_belt_path,
+            driver_present=driver_present,
         )
 
         return SeatbeltAuthenticity(
@@ -138,6 +154,7 @@ class SeatbeltDetectionModule:
         cabin_evidence: CabinEvidenceState,
         timestamp_ms: int,
         visual_belt_path: str,
+        driver_present: bool = True,
     ) -> tuple[str, float]:
         """Map the cabin evidence seatbelt state to an authenticity classification.
 
@@ -168,21 +185,27 @@ class SeatbeltDetectionModule:
         if seatbelt_state == CabinSeatbeltState.SEATBELT_NOT_VISIBLE:
             # Check for absence-based not-worn detection
             return self._check_absence_based_not_worn(
-                cabin_evidence, timestamp_ms
+                cabin_evidence, timestamp_ms, driver_present=driver_present,
             )
 
         # SEATBELT_UNKNOWN - check if we have enough observation time for absence detection
-        return self._check_absence_based_not_worn(cabin_evidence, timestamp_ms)
+        return self._check_absence_based_not_worn(
+            cabin_evidence, timestamp_ms, driver_present=driver_present,
+        )
 
     def _check_absence_based_not_worn(
         self,
         cabin_evidence: CabinEvidenceState,
         timestamp_ms: int,
+        driver_present: bool = True,
     ) -> tuple[str, float]:
         """Detect seatbelt-not-worn based on absence of seatbelt evidence.
 
         If the driver is present and enough time has passed without any
-        seatbelt detection, suspect that the seatbelt is not worn.
+        seatbelt detection, suspect that the seatbelt is not worn. This
+        handles both the case where a seatbelt was never seen, and the case
+        where it was previously seen but has not been seen for a long time
+        (e.g., driver unbuckled mid-drive).
         """
         if self._first_frame_ms is None:
             return "UNKNOWN", 0.0
@@ -191,11 +214,7 @@ class SeatbeltDetectionModule:
 
         # Check if driver presence is required and available
         if self.seatbelt_not_worn_requires_driver_present:
-            # CabinEvidenceState does not have driver_present directly,
-            # but if cabin evidence is enabled and running, we assume the
-            # system is observing. The pipeline provides driver presence
-            # upstream. We infer driver is present if evidence is enabled.
-            if not cabin_evidence.enabled:
+            if not driver_present:
                 return "UNKNOWN", 0.0
 
         # If enough time has passed without seatbelt being seen
@@ -205,6 +224,15 @@ class SeatbeltDetectionModule:
                 confidence = min(
                     0.7,
                     0.3 + 0.4 * (observation_duration_ms / max(1, self.seatbelt_not_worn_absence_ms * 2)),
+                )
+                return "NOT_WORN_SUSPECTED", confidence
+
+            # Seatbelt was previously seen but has not been seen for a while
+            elapsed_since_last_seen_ms = timestamp_ms - self._last_seatbelt_seen_ms
+            if elapsed_since_last_seen_ms >= self.seatbelt_not_worn_absence_ms:
+                confidence = min(
+                    0.7,
+                    0.3 + 0.4 * (elapsed_since_last_seen_ms / max(1, self.seatbelt_not_worn_absence_ms * 2)),
                 )
                 return "NOT_WORN_SUSPECTED", confidence
 
