@@ -370,12 +370,93 @@ cabin_evidence:
   normalize_bboxes: true
   roi_association_enabled: true
   relation_inference_enabled: true
+  near_ear_face_x_margin: 0.18
+  near_ear_face_y_margin_top: 0.25
+  near_ear_face_y_margin_bottom: 0.45
+  near_ear_max_below_face: 0.20
   synthetic_timeline_path: ""
   synthetic_use_normalized_bbox: true
   synthetic_default_confidence: 0.90
   synthetic_draw_objects: true
   manual_keyboard_enabled: false
   min_confidence: 0.35
+  phone_driver_roi_only: true
+  phone_ignore_outside_driver_roi: true
+  phone_driver_roi_expand_x: 0.55
+  phone_driver_roi_expand_y_top: 0.35
+  phone_driver_roi_expand_y_bottom: 2.40
+  phone_driver_roi_static_fallback: true
+  raw_phone_min_confidence: 0.25
+  phone_driver_roi_min_confidence: 0.25
+  phone_distraction_min_confidence: 0.25
+  phone_to_ear_min_confidence: 0.25
+  phone_pending_min_frames: 3
+  phone_distraction_min_frames: 8
+  phone_distraction_min_duration_ms: 500
+  phone_to_ear_min_frames: 6
+  phone_to_ear_min_duration_ms: 700
+  phone_track_hold_ms: 700
+  phone_clear_ms: 700
+  phone_max_gap_ms: 700
+  phone_min_iou_for_same_track: 0.08
+  phone_max_center_jump: 0.25
+  phone_to_ear_face_x_margin: 0.35
+  phone_to_ear_face_y_margin_top: 0.30
+  phone_to_ear_face_y_margin_bottom: 0.65
+  phone_to_ear_max_below_face: 0.45
+  phone_distraction_require_behavior_support: false
+  phone_distraction_behavior_support_shortens_ms: true
+  phone_distraction_with_head_down_ms: 300
+  phone_distraction_without_head_down_ms: 700
+  debug_verbose_phone_overlay: false
+  overlay_show_outside_roi_phone: false
+  overlay_show_low_conf_phone: false
+  overlay_show_held_phone_track: false
+  phone_event_debounce_ms: 500
+  phone_clear_debounce_ms: 700
+  review_export_enabled: false
+  review_export_dir: outputs/cabin_review
+  review_export_min_interval_ms: 500
+  driver_phone_only: true
+  allow_unknown_region_phone: false
+  driver_phone_min_confidence: 0.45
+  driver_phone_near_ear_min_confidence: 0.35
+  driver_phone_near_hand_min_confidence: 0.45
+  driver_phone_near_lap_min_confidence: 0.45
+  driver_phone_min_stable_frames: 8
+  driver_phone_min_duration_ms: 300
+  driver_phone_clear_ms: 500
+  driver_phone_track_hold_ms: 600
+  driver_phone_max_raw_gap_ms: 600
+  driver_phone_allow_gap_if_iou_stable: true
+  driver_phone_hold_does_not_increment_consecutive: true
+  driver_phone_clear_immediately_on_ignored_only: true
+  driver_phone_min_bbox_area: 0.003
+  driver_phone_max_bbox_area: 0.080
+  driver_phone_min_aspect_ratio: 0.35
+  driver_phone_max_aspect_ratio: 2.80
+  driver_phone_hard_min_bbox_area: 0.001
+  driver_phone_hard_max_bbox_area: 0.250
+  driver_phone_soft_max_bbox_area: 0.080
+  driver_phone_hard_min_aspect_ratio: 0.20
+  driver_phone_hard_max_aspect_ratio: 5.00
+  driver_phone_soft_large_area_min_confidence: 0.55
+  driver_phone_low_plausibility_extra_frames: 5
+  driver_phone_low_plausibility_extra_ms: 300
+  driver_phone_reject_large_square_area: 0.045
+  driver_phone_large_square_aspect_min: 0.75
+  driver_phone_large_square_aspect_max: 1.35
+  driver_phone_large_square_min_confidence: 0.70
+  driver_phone_max_center_jump: 0.18
+  driver_phone_min_iou_for_same_track: 0.10
+  driver_phone_event_debounce_ms: 300
+  driver_phone_candidate_on_debounce_ms: 300
+  driver_phone_clear_debounce_ms: 500
+  driver_phone_event_cooldown_ms: 500
+  driver_interaction_roi_expand_x: 0.35
+  driver_interaction_roi_expand_y_top: 0.25
+  driver_interaction_roi_expand_y_bottom: 1.20
+  passenger_phone_observed_only: true
   temporal_confirm_ms: 1200
   temporal_clear_ms: 700
   phone_confirm_ms: 1500
@@ -437,5 +518,7 @@ attention_state:
   prefer_distraction_when_eyes_open: true
   suppress_drowsiness_when_phone_likely: true
   degrade_on_sustained_ambiguous_attention_loss: true
+
+
 
 

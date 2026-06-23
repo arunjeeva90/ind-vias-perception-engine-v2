@@ -7,6 +7,7 @@ from ind_vias_dms.core.occupant_manager import TrackedFace
 from ind_vias_dms.core.types import (
     AttentionSubstate,
     AvailabilityState,
+    CabinEvidenceObject,
     DMSState,
     DistractionLevel,
     DrowsinessLevel,
@@ -235,18 +236,35 @@ class OverlayRenderer:
                 2,
                 cv2.LINE_AA,
             )
-        for obj in state.cabin_evidence.evidence_objects:
+        visible_objects, hidden_count = _visible_cabin_evidence_objects(state)
+        state.cabin_evidence.overlay_phone_hidden_duplicate_count = hidden_count
+        state.cabin_evidence.overlay_phone_suppressed_duplicates = hidden_count
+        drawn_labels: list[str] = []
+        drawn_boxes: list[list[float]] = []
+        for obj in visible_objects:
             if not obj.bbox:
                 continue
             x1, y1, x2, y2 = _bbox_to_px(obj.bbox, width, height)
-            color = (80, 220, 255)
+            semantic_level = _phone_overlay_semantic_level(obj, state)
+            color = _cabin_evidence_color(obj, semantic_level)
             label = _cabin_evidence_label(
                 obj.object_type.value,
                 obj.state.value,
                 obj.source,
                 obj.relation_to_driver.value,
+                semantic_level,
+                state.cabin_evidence.ignored_phone_reasons,
             )
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1)
+            drawn_labels.append(label)
+            drawn_boxes.append([float(v) for v in obj.bbox[:4]])
+            if obj.object_type.value == "PHONE" and semantic_level == "HELD":
+                state.cabin_evidence.overlay_phone_track_label = label
+                state.cabin_evidence.overlay_phone_track_is_held = True
+            if obj.object_type.value == "PHONE" and semantic_level not in {"IGNORED", "HELD"}:
+                mask = frame.copy()
+                cv2.rectangle(mask, (x1, y1), (x2, y2), (0, 220, 255), -1)
+                cv2.addWeighted(mask, 0.40, frame, 0.60, 0, frame)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2 if obj.object_type.value == "PHONE" else 1)
             cv2.putText(
                 frame,
                 label,
@@ -256,6 +274,10 @@ class OverlayRenderer:
                 color,
                 1,
             )
+        state.cabin_evidence.overlay_phone_drawn_count = len(drawn_labels)
+        state.cabin_evidence.overlay_phone_drawn_labels = drawn_labels
+        state.cabin_evidence.overlay_phone_drawn_boxes = drawn_boxes
+        state.cabin_evidence.phone_overlay_drawn = any(label.startswith("PHONE") for label in drawn_labels)
 
     def _draw_head_axis(
         self,
@@ -425,22 +447,7 @@ def status_dashboard_lines(
         ("Driver face state", state.driver_identity.driver_face_state),
         ("Proposal state", state.driver_identity.face_proposal_state),
         ("Track hold", state.driver_identity.driver_track_hold_state),
-        ("Vehicle gate", state.vehicle.dms_speed_gate_state),
-        ("Vehicle speed", f"{state.vehicle.ego_vehicle_speed_kph:.1f} km/h"),
-        (
-            "Indicators",
-            f"L={'ON' if state.vehicle.left_indicator_on else 'OFF'} "
-            f"R={'ON' if state.vehicle.right_indicator_on else 'OFF'}",
-        ),
-        ("Cabin backend", state.cabin_evidence.detector_backend),
-        ("Cabin status", state.cabin_evidence.backend_status),
-        ("Cabin objects", str(state.cabin_evidence.cabin_evidence_count)),
-        ("Cabin phone", state.cabin_evidence.phone_state.value),
-        ("Cabin phone rel", state.cabin_evidence.phone_relation or "NONE"),
-        ("Cabin belt", state.cabin_evidence.seatbelt_state.value),
-        ("Cabin smoking", state.cabin_evidence.smoking_state.value),
-        ("Cabin affect", "YES" if state.cabin_evidence.affect_final_dms_state else "NO"),
-        ("HMI banner", state.dms_v02.hmi_banner_text or state.dms_v02.final_banner),
+        ("Status page", f"{state.cabin_evidence.status_page_index}/2"),
         (
             "Head angle",
             "Yaw "
@@ -457,6 +464,28 @@ def status_dashboard_lines(
             f"rel {state.gaze.relative_yaw_deg:.1f}/"
             f"{state.gaze.relative_pitch_deg:.1f}/{state.gaze.relative_roll_deg:.1f}",
         ),
+        ("Vehicle gate", state.vehicle.dms_speed_gate_state),
+        ("Vehicle speed", f"{state.vehicle.ego_vehicle_speed_kph:.1f} km/h"),
+        (
+            "Indicators",
+            f"L={'ON' if state.vehicle.left_indicator_on else 'OFF'} "
+            f"R={'ON' if state.vehicle.right_indicator_on else 'OFF'}",
+        ),
+        ("Cabin backend", state.cabin_evidence.detector_backend),
+        ("Cabin status", state.cabin_evidence.backend_status),
+        ("Cabin objects", str(state.cabin_evidence.cabin_evidence_count)),
+        ("Cabin phone obs", "YES" if state.cabin_evidence.cabin_phone_observed else "NO"),
+        ("Cabin phone regs", "/".join(state.cabin_evidence.cabin_phone_observed_regions) or "NONE"),
+        ("Driver ROI phone", "YES" if state.cabin_evidence.phone_inside_driver_roi else "NO"),
+        ("Phone scenario", state.cabin_evidence.phone_scenario or "NONE"),
+        ("Phone confidence", f"{state.cabin_evidence.phone_track_confidence_smoothed:.2f}"),
+        ("Phone track age", f"{state.cabin_evidence.driver_phone_track_age_ms}ms"),
+        ("Phone raw/fresh", f"{'YES' if state.cabin_evidence.phone_raw_detected_this_frame else 'NO'}/{'YES' if state.cabin_evidence.phone_track_fresh_this_frame else 'NO'}"),
+        ("Ignored phone", str(state.cabin_evidence.ignored_phone_count)),
+        ("Cabin belt", state.cabin_evidence.seatbelt_state.value),
+        ("Cabin smoking", state.cabin_evidence.smoking_state.value),
+        ("Cabin affect", "YES" if state.cabin_evidence.affect_final_dms_state else "NO"),
+        ("HMI banner", state.dms_v02.hmi_banner_text or state.dms_v02.final_banner),
         ("Observability", state.driver_observability.state.value),
         ("Obs reason", ",".join(state.driver_observability.reason_codes) or "NONE"),
         ("Raw eyes", state.drowsiness.raw_eye_state),
@@ -611,19 +640,108 @@ def _bbox_to_px(bbox: list[float], width: int, height: int) -> tuple[int, int, i
     )
 
 
+def _visible_cabin_evidence_objects(state: DMSState) -> tuple[list[CabinEvidenceObject], int]:
+    visible: list[CabinEvidenceObject] = []
+    hidden = 0
+    for obj in state.cabin_evidence.evidence_objects:
+        if obj.object_type.value != "PHONE":
+            visible.append(obj)
+            continue
+        if state.cabin_evidence.driver_phone_track_held and obj.relation_to_driver.value == state.cabin_evidence.driver_phone_relation:
+            hidden += 1
+            continue
+        duplicate_index = next(
+            (
+                index for index, kept in enumerate(visible)
+                if kept.object_type.value == "PHONE" and _same_physical_phone(obj, kept)
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            visible.append(obj)
+            continue
+        kept = visible[duplicate_index]
+        obj_priority = _phone_overlay_priority(obj, state)
+        kept_priority = _phone_overlay_priority(kept, state)
+        if obj_priority > kept_priority or (obj_priority == kept_priority and obj.confidence > kept.confidence):
+            visible[duplicate_index] = obj
+        hidden += 1
+    return visible, hidden
+
+
+def _same_physical_phone(a: CabinEvidenceObject, b: CabinEvidenceObject) -> bool:
+    return _overlay_iou(a.bbox, b.bbox) > 0.35 or _overlay_center_distance(a.bbox, b.bbox) < 0.08
+
+
+def _phone_overlay_semantic_level(obj: CabinEvidenceObject, state: DMSState) -> str:
+    if obj.object_type.value != "PHONE":
+        return obj.state.value
+    if obj.state.value == "REJECTED":
+        return "IGNORED"
+    if state.cabin_evidence.driver_phone_track_held and obj.relation_to_driver.value in {
+        state.cabin_evidence.driver_phone_relation,
+        "NEAR_EAR",
+        "NEAR_HAND",
+        "NEAR_LAP",
+    }:
+        return "HELD"
+    if state.cabin_evidence.driver_phone_state.value == "PHONE_CONFIRMED" and obj.relation_to_driver.value == state.cabin_evidence.driver_phone_relation:
+        return "CONFIRMED"
+    if state.cabin_evidence.driver_phone_state.value in {
+        "PHONE_TO_EAR_SUSPECTED",
+        "PHONE_DISTRACTION",
+        "PHONE_IN_HAND_SUSPECTED",
+        "PHONE_DOWN_TEXTING_SUSPECTED",
+    } and obj.relation_to_driver.value == state.cabin_evidence.driver_phone_relation:
+        return "SUSPECTED"
+    if state.cabin_evidence.driver_phone_state.value != "NO_PHONE" and obj.relation_to_driver.value == state.cabin_evidence.driver_phone_relation:
+        return "CANDIDATE"
+    return "PENDING"
+
+
+def _phone_overlay_priority(obj: CabinEvidenceObject, state: DMSState) -> int:
+    level = _phone_overlay_semantic_level(obj, state)
+    return {"IGNORED": 0, "PENDING": 1, "HELD": 2, "CANDIDATE": 3, "SUSPECTED": 4, "CONFIRMED": 5}.get(level, 0)
+
+
+def _cabin_evidence_color(obj: CabinEvidenceObject, semantic_level: str) -> tuple[int, int, int]:
+    if semantic_level == "IGNORED":
+        return (130, 130, 130)
+    if semantic_level == "PENDING":
+        return (170, 190, 120)
+    if semantic_level == "HELD":
+        return (120, 170, 220)
+    if semantic_level == "SUSPECTED":
+        return (0, 190, 255)
+    return (80, 220, 255)
+
+
 def _cabin_evidence_label(
     object_type: str,
     lifecycle: str,
     source: str = "",
     relation: str = "",
+    semantic_level: str = "",
+    ignored_reasons: list[str] | None = None,
 ) -> str:
     prefix = "SYNTH " if source == "synthetic" else ("DET " if source == "onnx" else "")
     if object_type == "PHONE":
-        if prefix:
-            return f"{prefix}PHONE / {relation or lifecycle}"
-        if lifecycle in {"SUSPECTED", "CONFIRMED"}:
-            return f"PHONE {lifecycle}"
-        return "PHONE CANDIDATE"
+        if semantic_level == "IGNORED" or lifecycle == "REJECTED":
+            reason = _short_phone_ignore_reason(ignored_reasons or [])
+            if reason == "OUTSIDE_DRIVER_ROI":
+                return "PHONE OUTSIDE DRIVER ROI / IGNORED"
+            return "PHONE / IGNORED"
+        if semantic_level == "HELD":
+            return "PHONE TRACK / HELD"
+        if semantic_level == "SUSPECTED" and relation == "NEAR_EAR":
+            return "PHONE TO EAR / SUSPECTED"
+        if semantic_level == "SUSPECTED":
+            return "PHONE DISTRACTION"
+        if semantic_level == "CONFIRMED":
+            return "PHONE DISTRACTION"
+        if semantic_level == "CANDIDATE":
+            return "PHONE DISTRACTION"
+        return "PHONE IN DRIVER ROI / PENDING"
     if object_type == "SEATBELT":
         if prefix:
             return f"{prefix}SEATBELT / {relation or lifecycle}"
@@ -634,6 +752,40 @@ def _cabin_evidence_label(
         return "SMOKING CANDIDATE" if lifecycle == "CANDIDATE" else f"SMOKING {lifecycle}"
     return f"{prefix}CABIN EVIDENCE"
 
+
+def _short_phone_ignore_reason(reasons: list[str]) -> str:
+    if "PHONE_OUTSIDE_DRIVER_INTERACTION_ROI" in reasons:
+        return "OUTSIDE_DRIVER_ROI"
+    if any(reason.startswith("PHONE_BBOX") or reason == "PHONE_LARGE_SQUARE_LOW_CONFIDENCE" for reason in reasons):
+        return "IMPLAUSIBLE_SIZE"
+    if "DRIVER_PHONE_LOW_CONFIDENCE" in reasons:
+        return "LOW_CONF"
+    if "PHONE_UNSTABLE_TRACK" in reasons:
+        return "UNSTABLE_TRACK"
+    return "IGNORED"
+
+
+def _overlay_center_distance(a: list[float], b: list[float]) -> float:
+    if len(a) != 4 or len(b) != 4:
+        return 1.0
+    acx, acy = (a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0
+    bcx, bcy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+    return ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5
+
+
+def _overlay_iou(a: list[float], b: list[float]) -> float:
+    if len(a) != 4 or len(b) != 4:
+        return 0.0
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0.0 else 0.0
 
 def occupant_label(
     zone: str,
@@ -669,5 +821,7 @@ def clamp_endpoint(
     ex = min(max(0, int(round(ex))), width - 1)
     ey = min(max(0, int(round(ey))), height - 1)
     return ex, ey
+
+
 
 

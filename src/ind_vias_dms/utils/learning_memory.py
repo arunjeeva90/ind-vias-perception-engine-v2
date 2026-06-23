@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -76,6 +76,28 @@ class LearningMemoryWriter:
                 "phone_relation": state.cabin_evidence.phone_relation,
                 "phone_source": state.cabin_evidence.phone_source,
                 "phone_confidence": state.cabin_evidence.phone_confidence,
+                "cabin_phone_observed": state.cabin_evidence.cabin_phone_observed,
+                "cabin_phone_observed_count": state.cabin_evidence.cabin_phone_observed_count,
+                "cabin_phone_observed_regions": state.cabin_evidence.cabin_phone_observed_regions,
+                "driver_phone_state": state.cabin_evidence.driver_phone_state.value,
+                "driver_phone_relation": state.cabin_evidence.driver_phone_relation,
+                "driver_phone_confidence": state.cabin_evidence.driver_phone_confidence,
+                "driver_phone_source": state.cabin_evidence.driver_phone_source,
+                "driver_phone_relevant_count": state.cabin_evidence.driver_phone_relevant_count,
+                "driver_phone_pre_candidate": state.cabin_evidence.driver_phone_pre_candidate,
+                "driver_phone_track_age_ms": state.cabin_evidence.driver_phone_track_age_ms,
+                "driver_phone_consecutive_frames": state.cabin_evidence.driver_phone_consecutive_frames,
+                "driver_phone_last_seen_ms": state.cabin_evidence.driver_phone_last_seen_ms,
+                "driver_phone_stale_hold_active": state.cabin_evidence.driver_phone_stale_hold_active,
+                "driver_phone_relation_geometry_valid": state.cabin_evidence.driver_phone_relation_geometry_valid,
+                "driver_phone_relation_geometry_reason": state.cabin_evidence.driver_phone_relation_geometry_reason,
+                "driver_phone_relation_threshold_used": state.cabin_evidence.driver_phone_relation_threshold_used,
+                "overlay_phone_semantic_level": state.cabin_evidence.overlay_phone_semantic_level,
+                "overlay_phone_hidden_duplicate_count": state.cabin_evidence.overlay_phone_hidden_duplicate_count,
+                "current_driver_phone_relevant_count": state.cabin_evidence.current_driver_phone_relevant_count,
+                "current_ignored_phone_count": state.cabin_evidence.current_ignored_phone_count,
+                "ignored_phone_count": state.cabin_evidence.ignored_phone_count,
+                "ignored_phone_reasons": state.cabin_evidence.ignored_phone_reasons,
                 "seatbelt_state": state.cabin_evidence.seatbelt_state.value,
                 "smoking_state": state.cabin_evidence.smoking_state.value,
                 "evidence_count": state.cabin_evidence.cabin_evidence_count,
@@ -159,17 +181,17 @@ class LearningMemoryWriter:
         if previous == current:
             return ""
         if prev_phone == "NO_PHONE" and phone == "PHONE_OBJECT_CANDIDATE":
-            return "CABIN_PHONE_CANDIDATE"
+            return "PHONE_IN_DRIVER_ROI"
         if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_IN_HAND_SUSPECTED":
-            return "CABIN_PHONE_IN_HAND_SUSPECTED"
+            return "PHONE_DISTRACTION_STARTED"
         if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_TO_EAR_SUSPECTED":
-            return "CABIN_PHONE_TO_EAR_SUSPECTED"
+            return "PHONE_TO_EAR_STARTED"
         if prev_phone == "PHONE_OBJECT_CANDIDATE" and phone == "PHONE_DOWN_TEXTING_SUSPECTED":
-            return "CABIN_PHONE_DOWN_TEXTING_SUSPECTED"
+            return "PHONE_DISTRACTION_STARTED"
         if phone == "PHONE_CONFIRMED" and prev_phone != "PHONE_CONFIRMED":
-            return "CABIN_PHONE_CONFIRMED"
+            return "PHONE_DISTRACTION_STARTED"
         if prev_phone != "NO_PHONE" and phone == "NO_PHONE":
-            return "CABIN_PHONE_CLEARED"
+            return "PHONE_CLEARED"
         if prev_belt == "SEATBELT_UNKNOWN" and belt in {"SEATBELT_NOT_VISIBLE", "SEATBELT_NOT_WORN_SUSPECTED"}:
             return "CABIN_SEATBELT_UNKNOWN"
         if prev_belt != "SEATBELT_WORN_CONFIRMED" and belt == "SEATBELT_WORN_CONFIRMED":
@@ -200,3 +222,5 @@ class LearningMemoryWriter:
             "phone_down_warning_ms": self.config.phone_down_warning_ms,
             "eye_closure_microsleep_ms": self.config.eye_closure_microsleep_ms,
         }
+
+
