@@ -77,8 +77,9 @@ else
     echo "[WARN] Cabin ONNX model or class map not found."
     echo "       Model:     $MODEL_PATH ($([ -f "$MODEL_PATH" ] && echo 'EXISTS' || echo 'MISSING'))"
     echo "       Class map: $CLASS_MAP_PATH ($([ -f "$CLASS_MAP_PATH" ] && echo 'EXISTS' || echo 'MISSING'))"
-    echo "       Running without cabin ONNX evidence (dummy backend)."
+    echo "       Running with dummy cabin evidence backend."
     echo ""
+    CABIN_ONNX_ARGS=(--cabin-evidence-backend dummy)
 fi
 
 # Build display arguments

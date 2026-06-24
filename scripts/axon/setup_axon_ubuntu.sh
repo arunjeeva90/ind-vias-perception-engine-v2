@@ -40,6 +40,7 @@ sudo apt install -y \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    libgtk-3-0 \
     build-essential
 
 echo ""

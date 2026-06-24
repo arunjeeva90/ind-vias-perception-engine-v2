@@ -58,7 +58,7 @@ This branch **adds new files only** for AXON deployment:
 
 ```bash
 cd ~
-git clone <your-repo-url> ind-vias-perception-engine-v2
+git clone https://github.com/arunjeeva90/ind-vias-perception-engine-v2.git
 cd ind-vias-perception-engine-v2
 git checkout feature/axon-runtime-v029
 ```
