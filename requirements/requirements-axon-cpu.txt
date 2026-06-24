@@ -1,0 +1,35 @@
+# requirements-axon-cpu.txt
+# Minimal ARM64 Linux runtime requirements for DualSight DMS v0.2.9
+# Target: Vicharak AXON board, Ubuntu 22.04 ARM64, CPU/OpenCV Stage 1
+#
+# OpenCV choice:
+#   - opencv-python: includes highgui (cv2.imshow) for display mode. Requires
+#     system packages libgl1 and libglib2.0-0 (installed by setup_axon_ubuntu.sh).
+#   - For headless/SSH-only operation, replace with opencv-python-headless and
+#     always run with HEADLESS=1.
+#
+# NOTE: On Ubuntu 22.04 ARM64, some pip wheels may not be available.
+#       If pip install fails for a package, try the system package instead:
+#         sudo apt install python3-numpy python3-opencv
+#
+
+# Core runtime
+numpy>=1.24,<2.0
+opencv-python>=4.8,<5.0
+pyyaml>=6.0,<7.0
+
+# DMS face detection backend
+# mediapipe may have limited ARM64 wheel availability.
+# If install fails on ARM64, this package can be removed -- the DMS will still
+# start but face-detection quality will degrade.
+# Check: https://github.com/google/mediapipe/releases
+mediapipe>=0.10,<1.0
+
+# Cabin ONNX phone evidence inference
+# onnxruntime provides CPU inference for cabin object detection model.
+# On ARM64, use: pip install onnxruntime
+# If unavailable via pip, try: pip install onnxruntime-openvino or build from source.
+onnxruntime>=1.17,<2.0
+
+# Optional: testing (useful for validation after setup)
+pytest>=7.0,<9.0

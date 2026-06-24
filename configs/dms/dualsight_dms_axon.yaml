@@ -1,0 +1,627 @@
+# dualsight_dms_axon.yaml
+# DualSight DMS v0.2.9 - AXON Board Configuration
+# Target: Vicharak AXON, Ubuntu 22.04 ARM64, CPU/OpenCV Stage 1
+#
+# This config is derived from dualsight_dms_v0_1.yaml with adjustments
+# for CPU-constrained operation on the AXON board:
+#   - Reduced frame_resize_width (640) for faster CPU processing
+#   - Same DMS behavioral parameters as v0.2.9 baseline
+#   - No seatbelt heuristic logic
+#   - No RKNN/NPU acceleration (future work)
+#   - Compatible with USB webcam and video file input
+#
+# Usage:
+#   python apps/run_dms_demo.py --config configs/dms/dualsight_dms_axon.yaml ...
+#
+# TODO (future): Add RKNN/NPU inference backend settings for hardware acceleration
+# TODO (future): Add thermal throttle monitoring parameters
+# TODO (future): Tune face_detection_upscale for NPU-accelerated face detection
+
+# --- Face Detection ---
+face_backend: mediapipe
+max_num_faces: 4
+nir_mode: auto
+enable_nir_preprocessing: true
+nir_clahe_enabled: true
+nir_clahe_clip_limit: 2.0
+nir_clahe_tile_grid_size: 8
+nir_gamma: 1.15
+nir_equalize_hist_fallback: true
+face_detection_upscale: 1.5
+min_face_box_area_norm: 0.003
+driver_min_face_area_norm: 0.008
+driver_min_landmark_count: 120
+driver_min_face_completeness_score: 0.55
+driver_min_landmark_coverage_score: 0.45
+driver_face_aspect_min: 0.45
+driver_face_aspect_max: 1.35
+enable_strict_driver_face_validation: true
+
+# --- Face Proposal ---
+face_proposal_backend: mediapipe_face_detection
+face_proposal_model_selection: 1
+face_proposal_min_confidence: 0.35
+face_mesh_on_crops: true
+face_crop_margin: 0.25
+face_crop_min_size_px: 80
+face_crop_upscale: 2.0
+show_raw_face_proposals: false
+show_rejected_face_proposals: false
+show_debug_proposal_boxes: false
+
+# --- Webcam Stability ---
+webcam_face_mesh_dropout_hold_ms: 1000
+webcam_recent_valid_track_ms: 1500
+webcam_proposal_visible_hold_ms: 1200
+webcam_night_mode_stability_enabled: true
+
+# --- Night Mode ---
+night_banner_min_hold_ms: 700
+night_degraded_entry_sustain_ms: 300
+night_degraded_exit_stable_ms: 900
+night_unavailable_requires_no_proposal_ms: 2500
+night_low_light_face_hold_ms: 1200
+
+# --- Startup ---
+startup_init_suppress_degraded_ms: 500
+startup_init_banner: DMS MONITOR
+startup_allow_degraded_on_camera_error: true
+startup_clear_stable_ms: 400
+monitor_recovery_hold_ms: 400
+
+# --- Frame Processing ---
+# AXON CPU optimization: reduced from 960 to 640 for faster processing
+# Increase to 720 or 800 if face detection accuracy drops at distance
+frame_resize_width: 640
+output_fps: 30
+
+# --- Vehicle Simulation ---
+vehicle_speed_sim_enabled: true
+vehicle_speed_initial_kph: 0
+vehicle_speed_startup_ramp_enabled: true
+vehicle_speed_startup_ramp_ms: 3000
+vehicle_speed_startup_ramp_target_kph: 25
+dms_activation_speed_kph: 30
+dms_deactivation_speed_kph: 28
+speed_adjust_step_kph: 1
+speed_adjust_fast_step_kph: 5
+dms_activation_banner_ms: 2000
+standby_suppresses_alerts: true
+vehicle_monitor_window_enabled: true
+indicator_sim_enabled: true
+
+# --- Mirror Check ---
+mirror_check_allowed_ms: 2500
+mirror_check_monitor_ms: 3500
+mirror_check_warning_ms: 4000
+mirror_check_max_abs_pitch_deg: 20
+mirror_check_requires_matching_indicator: true
+sanctioned_mirror_max_ms: 2500
+sanctioned_mirror_min_yaw_deg: 12.0
+sanctioned_mirror_max_pitch_down_deg: 12.0
+sanctioned_mirror_require_eye_visibility: true
+sanctioned_mirror_block_phone_like_posture: true
+sanctioned_mirror_block_low_eye_visibility: true
+
+# --- Microsleep ---
+speed_aware_microsleep_enabled: true
+microsleep_threshold_low_speed_ms: 1800
+microsleep_threshold_high_speed_ms: 1200
+microsleep_high_speed_kph: 80
+critical_unavailable_requires_no_face: true
+critical_unavailable_requires_no_body: true
+
+# --- PERCLOS ---
+perclos_short_window_s: 5
+perclos_long_window_s: 60
+
+# --- Eye State ---
+eye_closed_threshold: 0.21
+blink_min_duration_ms: 80
+blink_max_duration_ms: 400
+microsleep_duration_ms: 1500
+microsleep_closure_ms: 1500
+eyes_off_road_warning_ms: 2000
+
+# --- Head Pose ---
+head_yaw_left_threshold_deg: -25
+head_yaw_right_threshold_deg: 25
+head_pitch_down_threshold_deg: 18
+head_pitch_up_threshold_deg: -20
+head_pose_smoothing_alpha: 0.35
+head_pose_outlier_threshold_deg: 90
+head_pose_min_confidence: 0.3
+
+# --- Phone Detection (behavioral parameters - unchanged from v0.2.9) ---
+phone_down_sustain_ms: 1200
+phone_down_suspect_ms: 1200
+phone_down_candidate_ms: 800
+phone_down_monitor_ms: 500
+phone_down_warning_ms: 1200
+phone_down_danger_ms: 3000
+phone_down_suspected_warning_ms: 1200
+phone_down_confirmed_warning_ms: 900
+phone_down_driver_unavailable_ms: 8000
+phone_gaze_offroad_suspect_ms: 2000
+phone_down_confirm_ms: 2500
+phone_down_clear_ms: 1000
+phone_attention_lost_ms: 2200
+phone_down_unavailable_ms: 8000
+phone_unavailable_ms: 8000
+phone_texting_warning_ms: 1000
+phone_confirmed_ms: 1500
+phone_posture_hold_ms: 1200
+phone_recovery_stable_ms: 1000
+prefer_distraction_banner_for_phone: true
+mobile_distraction_enabled: true
+phone_to_ear_sustain_ms: 700
+phone_to_ear_face_side_roi_expand: 0.35
+phone_to_ear_hand_distance_threshold_norm: 0.18
+phone_to_ear_min_hand_confidence: 0.45
+phone_to_ear_fast_escalation: true
+hand_to_ear_transient_ms: 1500
+ear_scratch_max_warning_ms: 2500
+phone_to_ear_candidate_ms: 2000
+phone_to_ear_suspected_ms: 3000
+phone_to_ear_confirmed_ms: 3000
+phone_to_ear_requires_phone_object_for_confirmed: true
+suppress_phone_to_ear_for_self_touch: true
+ear_scratch_motion_filter_enabled: true
+ear_scratch_local_motion_min_px: 3.0
+ear_scratch_local_motion_max_px: 45.0
+hand_to_ear_road_gaze_suppression_enabled: true
+hand_to_ear_road_gaze_max_abs_yaw_deg: 20
+hand_to_ear_road_gaze_max_abs_pitch_deg: 15
+texting_sustain_ms: 1500
+hand_near_face_distance_ratio: 0.45
+
+# --- Road Gaze Calibration ---
+road_gaze_calibration_enabled: true
+road_center_yaw_offset_deg: 0.0
+road_center_pitch_offset_deg: 0.0
+road_yaw_tolerance_deg: 22
+road_pitch_tolerance_deg: 18
+road_axis_head_pose_enabled: true
+road_axis_manual_calibration_key: "c"
+road_axis_auto_update_enabled: true
+road_axis_auto_update_only_when_road_gaze_stable: true
+road_axis_auto_update_min_confidence: 0.80
+road_axis_auto_update_max_abs_relative_yaw_deg: 10
+road_axis_auto_update_max_abs_relative_pitch_deg: 8
+road_axis_auto_update_alpha: 0.02
+
+# --- Side Glance ---
+road_yaw_normal_deg: 30
+side_glance_monitor_deg: 35
+side_glance_warning_deg: 40
+hard_side_glance_deg: 55
+side_glance_monitor_ms: 300
+side_glance_warning_ms: 1000
+side_glance_danger_ms: 4000
+side_glance_recovery_ms: 1000
+high_distraction_unavailable_ms: 5000
+visual_distraction_unavailable_ms: 10000
+attention_lost_unavailable_ms: 10000
+require_adas_risk_for_visual_unavailable: true
+require_adas_risk_for_attention_unavailable: true
+adas_risk_present_default: false
+
+# --- Gaze Away ---
+gaze_away_low_ms: 1000
+gaze_away_medium_ms: 2000
+gaze_away_high_ms: 3500
+max_valid_yaw_deg: 60
+max_valid_pitch_deg: 35
+max_valid_roll_deg: 30
+pose_unreliable_gaze_confidence_cap: 0.30
+pose_unreliable_hold_ms: 1000
+
+# --- Pose Plausibility ---
+pose_plausibility_filter_enabled: true
+pose_jump_hold_ms: 800
+max_yaw_jump_deg_per_100ms: 25
+max_pitch_jump_deg_per_100ms: 25
+max_roll_jump_deg_per_100ms: 25
+max_plausible_pitch_deg: 45
+max_plausible_roll_deg: 45
+pose_hold_requires_valid_face: true
+pose_hold_requires_eye_visibility_min: 0.60
+pose_hold_requires_face_confidence_min: 0.70
+pose_hold_requires_landmark_coverage_min: 0.45
+face_mesh_recovery_fast_exit_ms: 300
+
+# --- Road Facing Recovery ---
+road_facing_recovery_max_abs_yaw_deg: 20
+road_facing_recovery_max_abs_pitch_deg: 15
+clear_dropout_on_validated_face: true
+clear_low_eye_visibility_on_valid_eyes: true
+clear_face_lost_on_validated_face: true
+
+# --- Side Profile ---
+side_profile_yaw_threshold_deg: 25
+side_profile_hard_yaw_deg: 50
+side_profile_track_hold_ms: 1500
+side_profile_min_face_quality_relaxed: 0.35
+side_profile_min_landmark_coverage_relaxed: 0.35
+side_profile_degraded_delay_ms: 500
+side_profile_attention_first_enabled: true
+side_profile_face_loss_grace_ms: 1500
+side_profile_min_pose_confidence: 0.35
+side_profile_allow_one_eye_landmarks: true
+side_profile_preserve_driver_track_ms: 2000
+
+# --- Degraded State ---
+degraded_requires_true_observation_failure: true
+degraded_suppress_if_yaw_classifiable: true
+degraded_suppress_if_side_profile_track_valid: true
+degraded_suppress_if_recent_driver_track_ms: 1500
+degraded_true_failure_sustain_ms: 700
+attention_context_hold_ms: 2000
+head_down_hold_ms: 2000
+phone_down_hold_ms: 2000
+face_partial_hold_ms: 1200
+degraded_to_distraction_bridge_ms: 1200
+
+# --- Eye State Smoothing ---
+eye_state_smoothing_ms: 250
+eye_unknown_hold_ms: 300
+eye_partial_sustain_ms: 250
+
+# --- Duplicate Face ---
+duplicate_face_iou_threshold: 0.45
+duplicate_face_center_distance_threshold: 0.08
+
+# --- Drowsiness ---
+drowsiness_warning_sustain_ms: 1500
+drowsiness_high_sustain_ms: 2500
+drowsiness_warning_release_ms: 1200
+
+# --- Overlay ---
+max_axis_length_px: 80
+max_gaze_vector_length_px: 100
+draw_pose_axes: true
+draw_gaze_vector: true
+
+# --- Vehicle Layout ---
+vehicle_layout: RHD
+camera_mount_position: DASHBOARD_FRONT
+camera_view_direction: CABIN_REARWARD
+driver_image_side: LEFT
+mirror_input: false
+auto_generate_rois_from_layout: true
+
+# --- Seat Layer ---
+enable_seat_layer_reasoning: true
+front_row_face_min_area_norm: 0.015
+rear_row_face_max_area_norm: 0.012
+driver_min_front_layer_score: 0.55
+driver_min_candidate_score: 0.65
+rear_overlap_driver_reject_threshold: 0.60
+prefer_previous_driver_track_ms: 1500
+allow_rear_face_inside_driver_roi: true
+
+# --- ROI ---
+driver_roi_norm: null
+front_passenger_roi_norm: null
+rear_left_roi_norm: null
+rear_center_roi_norm: null
+rear_right_roi_norm: null
+rear_roi_norm:
+  x_min: 0.00
+  y_min: 0.00
+  x_max: 1.00
+  y_max: 0.70
+
+# --- Face Tracking ---
+face_track_iou_threshold: 0.25
+face_track_center_distance_threshold: 0.20
+non_driver_face_min_confidence: 0.70
+non_driver_min_face_area_norm: 0.006
+non_driver_confirm_frames: 4
+non_driver_confirm_time_ms: 300
+non_driver_require_landmarks: true
+non_driver_reject_if_landmark_count_below: 120
+non_driver_reject_static_headrest_like_boxes: true
+non_driver_false_positive_suppression_enabled: true
+occupant_min_temporal_sustain_ms: 700
+occupant_require_landmark_validation: true
+suppress_window_external_faces: true
+suppress_headrest_bag_false_occupants: true
+
+# --- Driver Tracking ---
+driver_track_hold_ms: 1500
+driver_session_hold_ms: 5000
+driver_reid_center_distance_threshold: 0.18
+driver_reid_area_ratio_min: 0.45
+driver_reid_area_ratio_max: 2.2
+driver_reid_roi_overlap_min: 0.20
+driver_swap_absence_ms: 15000
+driver_swap_embedding_enabled: false
+driver_reassociated_display_ms: 1000
+driver_body_fallback_enabled: true
+driver_body_roi_expand_x: 2.2
+driver_body_roi_expand_y: 3.0
+driver_body_presence_hold_ms: 5000
+
+# --- Road Calibration ---
+road_calibration_file: outputs/dms_road_calibration.yaml
+auto_load_road_calibration: true
+auto_save_road_calibration: true
+
+# --- Eye Baseline ---
+eye_open_baseline_window_s: 3.0
+normalized_eye_closed_threshold: 0.45
+normalized_eye_partial_threshold: 0.65
+eye_visibility_min_confidence: 0.45
+perclos_min_valid_observation_ms: 1000
+perclos_pause_on_low_eye_confidence: true
+perclos_count_partial_closure: true
+perclos_partial_closure_weight: 0.25
+eye_baseline_update_max_abs_yaw_deg: 20
+eye_baseline_update_max_abs_pitch_deg: 15
+eye_baseline_update_min_visibility: 0.75
+eye_baseline_update_only_when_open: true
+
+# --- Drowsiness Thresholds ---
+drowsiness_medium_sustain_ms: 1500
+drowsiness_high_sustain_override_ms: 2000
+perclos_5s_medium_threshold: 0.35
+perclos_5s_high_threshold: 0.55
+perclos_60s_medium_threshold: 0.25
+perclos_60s_high_threshold: 0.40
+
+# --- Display ---
+draw_all_faces: true
+draw_only_driver_pose: true
+road_gaze_calibrated: false
+drowsiness_perclos_medium: 0.25
+drowsiness_perclos_high: 0.40
+
+# --- Timeouts ---
+no_face_timeout_ms: 1000
+single_offroad_glance_monitor_ms: 1500
+single_offroad_glance_warning_ms: 2000
+single_offroad_glance_danger_ms: 3500
+downward_gaze_monitor_ms: 1000
+downward_gaze_warning_ms: 2000
+downward_gaze_danger_ms: 3000
+head_down_monitor_ms: 800
+head_down_danger_ms: 3000
+co_passenger_glance_monitor_ms: 1500
+co_passenger_glance_warning_ms: 2500
+co_passenger_glance_danger_ms: 4000
+rearward_look_monitor_ms: 1000
+rearward_look_warning_ms: 2000
+rearward_look_danger_ms: 3000
+blink_normal_max_ms: 400
+eye_closure_warning_ms: 800
+eye_closure_microsleep_ms: 1500
+perclos_5s_warning_threshold: 0.25
+perclos_5s_danger_threshold: 0.40
+no_face_transient_ms: 500
+no_face_degraded_ms: 1000
+driver_absent_unavailable_ms: 2000
+driver_unobservable_long_ms: 5000
+drowsiness_unknown_max_ms: 3000
+drowsiness_min_valid_eye_ms: 2000
+drowsiness_resolve_to_none_when_open: true
+degraded_entry_sustain_ms: 200
+degraded_exit_hold_ms: 800
+degraded_recovery_stable_ms: 1000
+min_banner_hold_ms: 800
+ambiguous_min_dwell_ms: 300
+ambiguous_to_monitor_ms: 500
+ambiguous_to_warning_ms: 1000
+ambiguous_hold_ms: 1200
+warning_clear_confirm_ms: 1200
+monitor_clear_confirm_ms: 800
+normal_clear_confirm_ms: 1000
+
+# --- Cumulative ---
+cumulative_window_short_s: 30
+cumulative_window_long_s: 60
+repeated_offroad_glance_warning_count: 3
+repeated_head_down_warning_count: 3
+repeated_phone_down_warning_count: 2
+repeated_slow_blink_warning_count: 4
+repeated_head_nod_warning_count: 3
+
+# --- Overlay Settings ---
+overlay_enabled: true
+telemetry_panel_enabled: true
+# status_window_enabled controlled by CLI --status-window flag
+status_window_enabled: false
+overlay_panel_embedded: true
+
+# --- Phone Object Detection ---
+phone_object_detection:
+  enabled: true
+  backend: onnx_yolo_optional
+  model_path: models/weights/phone_detector.onnx
+  class_names:
+    - cell phone
+    - mobile phone
+    - phone
+  confidence_threshold: 0.25
+  nms_threshold: 0.45
+  run_every_n_frames: 3
+  driver_roi_only: true
+  scan_regions:
+    - DRIVER_FACE_NEAR_EAR
+    - DRIVER_LAP
+    - DRIVER_HAND_REGION
+    - CENTER_CONSOLE
+    - STEERING_WHEEL_LOWER
+  allow_missing_model: true
+
+# --- Cabin Evidence ---
+# Cabin ONNX phone evidence settings (same as v0.2.9 baseline)
+# Backend is set by CLI: --cabin-evidence-backend onnx/dummy
+cabin_evidence:
+  enabled: true
+  detector_backend: dummy
+  model_path: ""
+  class_map_path: ""
+  input_width: 640
+  input_height: 640
+  nms_iou_threshold: 0.45
+  max_detections: 50
+  normalize_bboxes: true
+  roi_association_enabled: true
+  relation_inference_enabled: true
+  near_ear_face_x_margin: 0.18
+  near_ear_face_y_margin_top: 0.25
+  near_ear_face_y_margin_bottom: 0.45
+  near_ear_max_below_face: 0.20
+  synthetic_timeline_path: ""
+  synthetic_use_normalized_bbox: true
+  synthetic_default_confidence: 0.90
+  synthetic_draw_objects: true
+  manual_keyboard_enabled: false
+  min_confidence: 0.35
+  phone_driver_roi_only: true
+  phone_ignore_outside_driver_roi: true
+  phone_driver_roi_expand_x: 0.55
+  phone_driver_roi_expand_y_top: 0.35
+  phone_driver_roi_expand_y_bottom: 2.40
+  phone_driver_roi_static_fallback: true
+  raw_phone_min_confidence: 0.25
+  phone_driver_roi_min_confidence: 0.25
+  phone_distraction_min_confidence: 0.25
+  phone_to_ear_min_confidence: 0.25
+  phone_pending_min_frames: 3
+  phone_distraction_min_frames: 8
+  phone_distraction_min_duration_ms: 500
+  phone_to_ear_min_frames: 6
+  phone_to_ear_min_duration_ms: 700
+  phone_track_hold_ms: 700
+  phone_clear_ms: 700
+  phone_max_gap_ms: 700
+  phone_min_iou_for_same_track: 0.08
+  phone_max_center_jump: 0.25
+  phone_to_ear_face_x_margin: 0.35
+  phone_to_ear_face_y_margin_top: 0.30
+  phone_to_ear_face_y_margin_bottom: 0.65
+  phone_to_ear_max_below_face: 0.45
+  phone_distraction_require_behavior_support: false
+  phone_distraction_behavior_support_shortens_ms: true
+  phone_distraction_with_head_down_ms: 300
+  phone_distraction_without_head_down_ms: 700
+  debug_verbose_phone_overlay: false
+  overlay_show_outside_roi_phone: false
+  overlay_show_low_conf_phone: false
+  overlay_show_held_phone_track: false
+  phone_event_debounce_ms: 500
+  phone_clear_debounce_ms: 700
+  review_export_enabled: false
+  review_export_dir: outputs/cabin_review
+  review_export_min_interval_ms: 500
+  driver_phone_only: true
+  allow_unknown_region_phone: false
+  driver_phone_min_confidence: 0.45
+  driver_phone_near_ear_min_confidence: 0.35
+  driver_phone_near_hand_min_confidence: 0.45
+  driver_phone_near_lap_min_confidence: 0.45
+  driver_phone_min_stable_frames: 8
+  driver_phone_min_duration_ms: 300
+  driver_phone_clear_ms: 500
+  driver_phone_track_hold_ms: 600
+  driver_phone_max_raw_gap_ms: 600
+  driver_phone_allow_gap_if_iou_stable: true
+  driver_phone_hold_does_not_increment_consecutive: true
+  driver_phone_clear_immediately_on_ignored_only: true
+  driver_phone_min_bbox_area: 0.003
+  driver_phone_max_bbox_area: 0.080
+  driver_phone_min_aspect_ratio: 0.35
+  driver_phone_max_aspect_ratio: 2.80
+  driver_phone_hard_min_bbox_area: 0.001
+  driver_phone_hard_max_bbox_area: 0.250
+  driver_phone_soft_max_bbox_area: 0.080
+  driver_phone_hard_min_aspect_ratio: 0.20
+  driver_phone_hard_max_aspect_ratio: 5.00
+  driver_phone_soft_large_area_min_confidence: 0.55
+  driver_phone_low_plausibility_extra_frames: 5
+  driver_phone_low_plausibility_extra_ms: 300
+  driver_phone_reject_large_square_area: 0.045
+  driver_phone_large_square_aspect_min: 0.75
+  driver_phone_large_square_aspect_max: 1.35
+  driver_phone_large_square_min_confidence: 0.70
+  driver_phone_max_center_jump: 0.18
+  driver_phone_min_iou_for_same_track: 0.10
+  driver_phone_event_debounce_ms: 300
+  driver_phone_candidate_on_debounce_ms: 300
+  driver_phone_clear_debounce_ms: 500
+  driver_phone_event_cooldown_ms: 500
+  driver_interaction_roi_expand_x: 0.35
+  driver_interaction_roi_expand_y_top: 0.25
+  driver_interaction_roi_expand_y_bottom: 1.20
+  passenger_phone_observed_only: true
+  temporal_confirm_ms: 1200
+  temporal_clear_ms: 700
+  phone_confirm_ms: 1500
+  phone_to_ear_confirm_ms: 1200
+  phone_down_texting_confirm_ms: 1500
+  seatbelt_confirm_ms: 3000
+  smoking_confirm_ms: 2500
+  draw_cabin_evidence: true
+  affect_final_dms_state: false
+
+# --- Head Down ---
+head_down_uncertain_sustain_ms: 1200
+head_down_candidate_ms: 500
+head_down_warning_ms: 1200
+head_down_attention_lost_ms: 1800
+head_down_clear_ms: 800
+head_down_decay_ms_per_frame: 50
+head_down_unavailable_ms: 8000
+enable_appearance_based_head_down: true
+
+# --- Banner ---
+banner_min_hold_ms: 700
+normal_min_hold_ms: 300
+state_clear_confirm_ms: 800
+
+# --- Occupant Detection ---
+auto_generate_seat_rois_from_layout: true
+driver_roi_priority: true
+allow_driver_fallback_outside_roi: false
+enable_front_passenger_detection: true
+enable_rear_occupant_detection: true
+front_passenger_confirm_frames: 3
+rear_occupant_confirm_frames: 5
+unknown_occupant_confirm_frames: 5
+min_occupant_box_area_norm: 0.002
+min_rear_face_box_area_norm: 0.001
+min_occupant_confidence: 0.45
+min_partial_occupant_confidence: 0.35
+occupant_min_track_sustain_ms: 500
+occupant_min_face_completeness_score: 0.55
+occupant_false_positive_reject_static_headrest: true
+rear_static_headrest_suppression: true
+rear_static_object_suppression_frames: 10
+rear_occupant_min_stable_frames: 5
+rear_occupant_max_jump_ratio: 0.35
+
+# --- Attention State ---
+attention_state:
+  enabled: true
+  head_down_pitch_deg: 18.0
+  gaze_down_pitch_deg: 15.0
+  eyes_offroad_min_ms: 1500
+  phone_suspect_min_ms: 2000
+  phone_attention_lost_ms: 2200
+  microsleep_eye_closed_ms: 1500
+  drowsy_eye_closed_ms: 800
+  perclos_high_threshold: 0.40
+  perclos_medium_threshold: 0.25
+  low_head_motion_deg_per_s: 3.0
+  ambiguous_timeout_ms: 1000
+  side_profile_hold_ms: 1200
+  head_down_candidate_ms: 500
+  head_down_warning_ms: 1200
+  head_down_attention_lost_ms: 1800
+  require_eye_visibility_for_drowsiness: true
+  prefer_drowsiness_when_eyes_closed: true
+  prefer_distraction_when_eyes_open: true
+  suppress_drowsiness_when_phone_likely: true
+  degrade_on_sustained_ambiguous_attention_loss: true
