@@ -148,10 +148,13 @@ class CabinPhoneState(StableStrEnum):
 
 class CabinSeatbeltState(StableStrEnum):
     SEATBELT_UNKNOWN = "SEATBELT_UNKNOWN"
+    SEATBELT_CANDIDATE = "SEATBELT_CANDIDATE"
     SEATBELT_WORN_CONFIRMED = "SEATBELT_WORN_CONFIRMED"
     SEATBELT_NOT_VISIBLE = "SEATBELT_NOT_VISIBLE"
     SEATBELT_NOT_WORN_SUSPECTED = "SEATBELT_NOT_WORN_SUSPECTED"
     SEATBELT_MISUSE_SUSPECTED = "SEATBELT_MISUSE_SUSPECTED"
+    SEATBELT_CONFLICTING_EVIDENCE = "SEATBELT_CONFLICTING_EVIDENCE"
+    SEATBELT_HELD_OCCLUDED = "SEATBELT_HELD_OCCLUDED"
     SEATBELT_CONFIDENCE_LOW = "SEATBELT_CONFIDENCE_LOW"
 
 
@@ -413,6 +416,33 @@ class CabinEvidenceState:
     ignored_phone_count: int = 0
     ignored_phone_reasons: list[str] = field(default_factory=list)
     seatbelt_state: CabinSeatbeltState = CabinSeatbeltState.SEATBELT_UNKNOWN
+    seatbelt_backend: str = "disabled"
+    seatbelt_confidence: float = 0.0
+    seatbelt_torso_roi: list[float] = field(default_factory=list)
+    seatbelt_candidate_line: list[float] = field(default_factory=list)
+    seatbelt_candidate_score: float = 0.0
+    seatbelt_corridor_score: float = 0.0
+    seatbelt_width_score: float = 0.0
+    seatbelt_edge_pair_score: float = 0.0
+    seatbelt_anchor_score: float = 0.0
+    seatbelt_temporal_score: float = 0.0
+    seatbelt_candidate_width_px: float = 0.0
+    seatbelt_expected_width_px: float = 0.0
+    seatbelt_track_age_ms: int = 0
+    seatbelt_track_stable_frames: int = 0
+    seatbelt_track_reset_reason: str = ""
+    seatbelt_rejected_reason: str = ""
+    seatbelt_overlay_drawn: bool = False
+    seatbelt_total_raw_candidates: int = 0
+    seatbelt_rejected_lanyard_count: int = 0
+    seatbelt_rejected_arm_shadow_count: int = 0
+    seatbelt_rejected_outside_corridor_count: int = 0
+    seatbelt_confirmed_frames: int = 0
+    seatbelt_candidate_frames: int = 0
+    seatbelt_unstable_track_reset_count: int = 0
+    seatbelt_confirmed_ms: int = 0
+    seatbelt_affect_final_dms_state: bool = False
+    seatbelt_evidence_age_ms: int = 0
     smoking_state: CabinSmokingState = CabinSmokingState.NO_SMOKING
     cabin_evidence_count: int = 0
     evidence_objects: list[CabinEvidenceObject] = field(default_factory=list)

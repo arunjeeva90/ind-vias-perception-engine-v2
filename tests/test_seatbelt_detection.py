@@ -10,6 +10,7 @@ Validates seatbelt authenticity detection logic including:
 """
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -619,3 +620,161 @@ class TestSeatbeltReset:
             )
 
         assert result.final_state == "NOT_WORN_SUSPECTED"
+
+
+
+def _make_heuristic_config(**seatbelt_overrides) -> DMSConfig:
+    cabin_cfg = {
+        "enabled": True,
+        "seatbelt_not_worn_absence_ms": 2500,
+        "seatbelt_misuse_min_confidence": 0.5,
+        "seatbelt_worn_min_confidence": 0.6,
+        "seatbelt_not_worn_requires_driver_present": True,
+    }
+    seatbelt_cfg = {
+        "enabled": True,
+        "backend": "heuristic",
+        "affect_final_dms_state": False,
+        "min_confirm_ms": 1500,
+        "clear_ms": 1000,
+        "torso_roi_top_offset_face_h": 0.8,
+        "torso_roi_bottom_offset_face_h": 3.8,
+        "torso_roi_width_expand_face_w": 1.8,
+        "belt_min_diagonal_length_ratio": 0.35,
+        "belt_min_contrast": 20,
+        "belt_min_width_px": 8,
+        "belt_max_width_px": 80,
+        "seatbelt_track_min_stable_frames": 3,
+        "seatbelt_track_min_stable_ms": 1500,
+    }
+    seatbelt_cfg.update(seatbelt_overrides)
+    return DMSConfig(cabin_evidence=cabin_cfg, seatbelt_detection=seatbelt_cfg)
+
+
+def _make_torso_frame_with_belt() -> np.ndarray:
+    frame = np.full((480, 640, 3), 210, dtype=np.uint8)
+    cv2.line(frame, (70, 160), (290, 420), (25, 25, 25), 22)
+    return frame
+
+
+class TestSeatbeltVisualHeuristic:
+    def test_torso_roi_generated_from_driver_face_box(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        frame = _make_frame()
+        cabin = _make_cabin_evidence()
+
+        module.process(frame, cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=(100, 50, 200, 150))
+
+        assert cabin.seatbelt_torso_roi
+        x1, y1, x2, y2 = cabin.seatbelt_torso_roi
+        assert 0.0 <= x1 < x2 <= 1.0
+        assert 0.0 <= y1 < y2 <= 1.0
+
+    def test_seatbelt_heuristic_unknown_without_face_or_torso(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        cabin = _make_cabin_evidence()
+
+        result = module.process(_make_frame(), cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=None)
+
+        assert cabin.seatbelt_state == CabinSeatbeltState.SEATBELT_UNKNOWN
+        assert result.final_state == "UNKNOWN"
+        assert "SEATBELT_TORSO_NOT_VISIBLE" in cabin.seatbelt_reason_codes
+
+    def test_stable_diagonal_belt_promotes_to_worn_confirmed(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        cabin = _make_cabin_evidence()
+        frame = _make_torso_frame_with_belt()
+        face = (100, 50, 200, 150)
+
+        module.process(frame, cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=face)
+        module.process(frame, cabin_evidence_state=cabin, timestamp_ms=800, driver_face_bbox=face)
+        result = module.process(frame, cabin_evidence_state=cabin, timestamp_ms=1600, driver_face_bbox=face)
+
+        assert cabin.seatbelt_state == CabinSeatbeltState.SEATBELT_WORN_CONFIRMED
+        assert result.final_state == "WORN_CONFIRMED"
+        assert cabin.seatbelt_candidate_line
+        assert "SEATBELT_WORN_CONFIRMED" in cabin.seatbelt_reason_codes
+
+    def test_short_neck_lanyard_like_line_is_rejected(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        frame = np.full((480, 640, 3), 210, dtype=np.uint8)
+        cv2.line(frame, (145, 150), (190, 250), (25, 25, 25), 10)
+        cabin = _make_cabin_evidence()
+
+        module.process(frame, cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=(100, 50, 200, 150))
+
+        assert cabin.seatbelt_state != CabinSeatbeltState.SEATBELT_WORN_CONFIRMED
+        assert "SEATBELT_LANYARD_REJECTED" in cabin.seatbelt_reason_codes
+
+    def test_no_belt_visible_waits_before_not_worn_suspected(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        frame = np.full((480, 640, 3), 210, dtype=np.uint8)
+        cabin = _make_cabin_evidence()
+        face = (100, 50, 200, 150)
+
+        early = module.process(frame, cabin_evidence_state=cabin, timestamp_ms=1000, driver_face_bbox=face)
+        late = module.process(frame, cabin_evidence_state=cabin, timestamp_ms=4000, driver_face_bbox=face)
+
+        assert early.final_state in {"NOT_VISIBLE", "UNKNOWN"}
+        assert late.final_state == "NOT_WORN_SUSPECTED"
+        assert cabin.seatbelt_state == CabinSeatbeltState.SEATBELT_NOT_WORN_SUSPECTED
+
+    def test_seatbelt_heuristic_does_not_affect_final_dms_state_by_default(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        assert module.affect_final_dms_state is False
+
+    def test_seatbelt_status_and_debug_fields_are_populated(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        cabin = _make_cabin_evidence()
+        module.process(_make_torso_frame_with_belt(), cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=(100, 50, 200, 150))
+
+        assert cabin.seatbelt_backend == "heuristic"
+        assert cabin.seatbelt_confidence > 0.0
+        assert cabin.seatbelt_candidate_score > 0.0
+        assert cabin.seatbelt_torso_roi
+        assert cabin.seatbelt_affect_final_dms_state is False
+
+
+    def test_dark_line_outside_belt_corridor_is_rejected(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        frame = np.full((480, 640, 3), 210, dtype=np.uint8)
+        cv2.line(frame, (290, 160), (70, 420), (25, 25, 25), 22)
+        cabin = _make_cabin_evidence()
+
+        module.process(frame, cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=(100, 50, 200, 150))
+
+        assert cabin.seatbelt_state != CabinSeatbeltState.SEATBELT_CANDIDATE
+        assert cabin.seatbelt_state != CabinSeatbeltState.SEATBELT_WORN_CONFIRMED
+        assert set(cabin.seatbelt_reason_codes) & {
+            "SEATBELT_OUTSIDE_BELT_CORRIDOR_REJECTED",
+            "SEATBELT_UPPER_ANCHOR_MISSING",
+            "SEATBELT_LOWER_ANCHOR_MISSING",
+        }
+
+    def test_horizontal_arm_shadow_like_candidate_is_rejected(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config())
+        frame = np.full((480, 640, 3), 210, dtype=np.uint8)
+        cv2.line(frame, (40, 270), (310, 285), (25, 25, 25), 26)
+        cabin = _make_cabin_evidence()
+
+        module.process(frame, cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=(100, 50, 200, 150))
+
+        assert cabin.seatbelt_state != CabinSeatbeltState.SEATBELT_CANDIDATE
+        assert "SEATBELT_HORIZONTAL_SHADOW_REJECTED" in cabin.seatbelt_reason_codes or "SEATBELT_OUTSIDE_BELT_CORRIDOR_REJECTED" in cabin.seatbelt_reason_codes
+
+    def test_different_candidate_lines_do_not_accumulate_confirmation(self):
+        module = SeatbeltDetectionModule(_make_heuristic_config(seatbelt_track_max_center_jump_norm=0.03))
+        frame_a = np.full((480, 640, 3), 210, dtype=np.uint8)
+        frame_b = np.full((480, 640, 3), 210, dtype=np.uint8)
+        cv2.line(frame_a, (70, 160), (290, 420), (25, 25, 25), 22)
+        cv2.line(frame_b, (30, 165), (250, 420), (25, 25, 25), 22)
+        cabin = _make_cabin_evidence()
+        face = (100, 50, 200, 150)
+
+        module.process(frame_a, cabin_evidence_state=cabin, timestamp_ms=0, driver_face_bbox=face)
+        module.process(frame_b, cabin_evidence_state=cabin, timestamp_ms=800, driver_face_bbox=face)
+        module.process(frame_a, cabin_evidence_state=cabin, timestamp_ms=1600, driver_face_bbox=face)
+
+        assert cabin.seatbelt_state != CabinSeatbeltState.SEATBELT_WORN_CONFIRMED
+        assert cabin.seatbelt_unstable_track_reset_count > 0
+

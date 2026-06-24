@@ -466,6 +466,56 @@ cabin_evidence:
   smoking_confirm_ms: 2500
   draw_cabin_evidence: true
   affect_final_dms_state: false
+seatbelt_detection:
+  enabled: true
+  backend: heuristic
+  affect_final_dms_state: false
+  min_confirm_ms: 1500
+  clear_ms: 1000
+  driver_torso_roi_from_face: true
+  torso_roi_top_offset_face_h: 0.8
+  torso_roi_bottom_offset_face_h: 3.8
+  torso_roi_width_expand_face_w: 1.8
+  belt_dark_line_enabled: true
+  belt_edge_detection_enabled: true
+  belt_min_diagonal_length_ratio: 0.35
+  belt_min_contrast: 25
+  belt_min_width_px: 8
+  belt_max_width_px: 80
+  belt_expected_slope: auto_from_driver_side
+  belt_expected_slope_rhd_image_left_driver: positive_or_negative_based_on_image_coordinates
+  belt_temporal_stability_required: true
+  belt_corridor_enabled: true
+  belt_upper_anchor_from_driver_side: true
+  belt_lower_anchor_from_opposite_hip: true
+  belt_corridor_width_ratio: 0.28
+  belt_min_corridor_overlap: 0.60
+  belt_require_upper_anchor_hit: true
+  belt_require_lower_anchor_hit: true
+  belt_require_chest_crossing: true
+  belt_allow_mirror_from_driver_side: true
+  seatbelt_width_ratio_to_face_min: 0.16
+  seatbelt_width_ratio_to_face_max: 0.45
+  seatbelt_nominal_width_ratio_to_face: 0.30
+  seatbelt_lanyard_max_width_ratio_to_face: 0.12
+  seatbelt_require_parallel_edges: true
+  seatbelt_parallel_edge_max_angle_delta_deg: 12
+  seatbelt_edge_pair_width_tolerance_ratio: 0.45
+  seatbelt_dark_fill_min_contrast: 18
+  seatbelt_min_band_length_ratio: 0.45
+  seatbelt_reject_fast_moving_candidate: true
+  seatbelt_max_candidate_motion_norm_per_sec: 0.08
+  seatbelt_reject_horizontal_angle_deg: 25
+  seatbelt_reject_arm_occlusion_candidates: true
+  seatbelt_same_track_required: true
+  seatbelt_track_max_center_jump_norm: 0.06
+  seatbelt_track_max_angle_delta_deg: 12
+  seatbelt_track_max_width_delta_ratio: 0.35
+  seatbelt_track_min_stable_frames: 8
+  seatbelt_track_min_stable_ms: 1500
+  seatbelt_candidate_visible_min_ms: 300
+  seatbelt_short_occlusion_hold_ms: 700
+  show_raw_seatbelt_candidates: false
 head_down_uncertain_sustain_ms: 1200
 head_down_candidate_ms: 500
 head_down_warning_ms: 1200

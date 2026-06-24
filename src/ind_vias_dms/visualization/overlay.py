@@ -75,7 +75,7 @@ class OverlayRenderer:
             self._draw_norm_roi(out, driver_roi_norm)
         if face_proposals and show_debug_proposal_boxes:
             self._draw_face_proposals(out, face_proposals)
-        if state.cabin_evidence.enabled and state.cabin_evidence.evidence_objects:
+        if state.cabin_evidence.enabled and (state.cabin_evidence.evidence_objects or state.cabin_evidence.seatbelt_candidate_line):
             self._draw_cabin_evidence(out, state)
         if draw_all_faces and faces:
             self._draw_occupant_boxes(out, faces, state, show_track_id)
@@ -276,8 +276,34 @@ class OverlayRenderer:
             )
         state.cabin_evidence.overlay_phone_drawn_count = len(drawn_labels)
         state.cabin_evidence.overlay_phone_drawn_labels = drawn_labels
+        self._draw_seatbelt_evidence(frame, state)
         state.cabin_evidence.overlay_phone_drawn_boxes = drawn_boxes
         state.cabin_evidence.phone_overlay_drawn = any(label.startswith("PHONE") for label in drawn_labels)
+
+    def _draw_seatbelt_evidence(self, frame: np.ndarray, state: DMSState) -> None:
+        line = state.cabin_evidence.seatbelt_candidate_line
+        if not line or len(line) < 4:
+            return
+        belt_state = state.cabin_evidence.seatbelt_state.value
+        if belt_state not in {"SEATBELT_CANDIDATE", "SEATBELT_WORN_CONFIRMED", "SEATBELT_HELD_OCCLUDED"}:
+            return
+        height, width = frame.shape[:2]
+        x1, y1, x2, y2 = _bbox_to_px(line, width, height)
+        if belt_state == "SEATBELT_WORN_CONFIRMED":
+            color = (80, 255, 120)
+            label = "SEATBELT WORN / HEURISTIC"
+        elif belt_state == "SEATBELT_HELD_OCCLUDED":
+            color = (120, 210, 180)
+            label = "SEATBELT WORN / HELD OCCLUDED"
+        else:
+            color = (0, 230, 255)
+            label = "SEATBELT CANDIDATE"
+        mask = frame.copy()
+        cv2.line(mask, (x1, y1), (x2, y2), color, 18)
+        cv2.addWeighted(mask, 0.28, frame, 0.72, 0, frame)
+        cv2.line(frame, (x1, y1), (x2, y2), color, 4)
+        cv2.putText(frame, label, (min(x1, x2), max(18, min(y1, y2) - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+        state.cabin_evidence.seatbelt_overlay_drawn = True
 
     def _draw_head_axis(
         self,
@@ -482,7 +508,12 @@ def status_dashboard_lines(
         ("Phone track age", f"{state.cabin_evidence.driver_phone_track_age_ms}ms"),
         ("Phone raw/fresh", f"{'YES' if state.cabin_evidence.phone_raw_detected_this_frame else 'NO'}/{'YES' if state.cabin_evidence.phone_track_fresh_this_frame else 'NO'}"),
         ("Ignored phone", str(state.cabin_evidence.ignored_phone_count)),
+        ("Seatbelt backend", state.cabin_evidence.seatbelt_backend),
         ("Cabin belt", state.cabin_evidence.seatbelt_state.value),
+        ("Seatbelt conf", f"{state.cabin_evidence.seatbelt_confidence:.2f}"),
+        ("Seatbelt age", f"{state.cabin_evidence.seatbelt_confirmed_ms}ms"),
+        ("Seatbelt reason", ",".join(state.cabin_evidence.seatbelt_reason_codes[-2:]) or "NONE"),
+        ("Seatbelt affect", "YES" if state.cabin_evidence.seatbelt_affect_final_dms_state else "NO"),
         ("Cabin smoking", state.cabin_evidence.smoking_state.value),
         ("Cabin affect", "YES" if state.cabin_evidence.affect_final_dms_state else "NO"),
         ("HMI banner", state.dms_v02.hmi_banner_text or state.dms_v02.final_banner),
