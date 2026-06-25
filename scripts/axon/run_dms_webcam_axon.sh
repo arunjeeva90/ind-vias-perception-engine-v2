@@ -3,11 +3,12 @@
 # Run DualSight DMS v0.2.9 on live webcam on AXON board
 #
 # Usage:
-#   bash scripts/axon/run_dms_webcam_axon.sh [CAMERA_INDEX] [OUTPUT_DIR]
+#   bash scripts/axon/run_dms_webcam_axon.sh [CAMERA_INDEX] [OUTPUT_DIR] [DMS_ARGS...]
 #
 # Arguments:
 #   CAMERA_INDEX  - camera device index (default: 0)
 #   OUTPUT_DIR    - output directory (default: outputs/axon_webcam_live)
+#   DMS_ARGS      - optional extra args forwarded to apps/run_dms_demo.py
 #
 # Environment variables:
 #   HEADLESS=1    - run without display (no --display, no --status-window)
@@ -16,12 +17,23 @@
 #   bash scripts/axon/run_dms_webcam_axon.sh 0
 #   bash scripts/axon/run_dms_webcam_axon.sh 1 outputs/axon_cam1
 #   HEADLESS=1 bash scripts/axon/run_dms_webcam_axon.sh 0 outputs/axon_headless_test
+#
+# Low-lag AXON mode:
+#   bash scripts/axon/run_dms_webcam_axon.sh 1 --camera-fps 20 --inference-fps 12 --width 640 --height 480 --fourcc MJPG --show-perf
 
 set -e
 
 # Arguments
 CAMERA_INDEX="${1:-0}"
-OUTPUT_DIR="${2:-outputs/axon_webcam_live}"
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+OUTPUT_DIR="outputs/axon_webcam_live"
+if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then
+    OUTPUT_DIR="$1"
+    shift
+fi
+DMS_EXTRA_ARGS=("$@")
 
 # Determine project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +46,7 @@ echo "========================================"
 echo "  Camera index: $CAMERA_INDEX"
 echo "  Output dir:   $OUTPUT_DIR"
 echo "  Headless:     ${HEADLESS:-0}"
+echo "  Extra args:   ${DMS_EXTRA_ARGS[*]:-(none)}"
 echo "========================================"
 echo ""
 
@@ -90,7 +103,8 @@ python apps/run_dms_demo.py \
     --debug-trace "$OUTPUT_DIR/webcam_trace.jsonl" \
     --event-log "$OUTPUT_DIR/webcam_events.csv" \
     --event-json "$OUTPUT_DIR/webcam_events.json" \
-    --learning-memory "$OUTPUT_DIR/webcam_learning.jsonl"
+    --learning-memory "$OUTPUT_DIR/webcam_learning.jsonl" \
+    "${DMS_EXTRA_ARGS[@]}"
 
 echo ""
 echo "[INFO] DMS run complete. Output files in: $OUTPUT_DIR"

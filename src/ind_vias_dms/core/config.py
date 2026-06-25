@@ -343,6 +343,8 @@ class DMSConfig:
     telemetry_panel_enabled: bool = True
     status_window_enabled: bool = False
     overlay_panel_embedded: bool = True
+    runtime: dict[str, Any] | None = None
+    performance: dict[str, Any] | None = None
     attention_state: dict[str, Any] | None = None
     phone_object_detection: dict[str, Any] | None = None
     cabin_evidence: dict[str, Any] | None = None

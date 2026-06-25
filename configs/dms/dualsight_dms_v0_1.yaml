@@ -42,6 +42,18 @@ startup_clear_stable_ms: 400
 monitor_recovery_hold_ms: 400
 frame_resize_width: 960
 output_fps: 30
+runtime:
+  camera_fps: 20
+  inference_fps: 15
+  width: 640
+  height: 480
+  fourcc: "MJPG"
+  latest_frame_buffer: true
+  opencl: false
+performance:
+  show_perf: true
+  model_gops_per_frame: 0.0
+  estimate_tops: true
 vehicle_speed_sim_enabled: true
 vehicle_speed_initial_kph: 0
 vehicle_speed_startup_ramp_enabled: true
@@ -518,7 +530,6 @@ attention_state:
   prefer_distraction_when_eyes_open: true
   suppress_drowsiness_when_phone_likely: true
   degrade_on_sustained_ambiguous_attention_loss: true
-
 
 
 

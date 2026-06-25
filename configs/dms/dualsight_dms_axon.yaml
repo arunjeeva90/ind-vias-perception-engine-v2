@@ -73,7 +73,19 @@ monitor_recovery_hold_ms: 400
 # AXON CPU optimization: reduced from 960 to 640 for faster processing
 # Increase to 720 or 800 if face detection accuracy drops at distance
 frame_resize_width: 640
-output_fps: 30
+output_fps: 15
+runtime:
+  camera_fps: 20
+  inference_fps: 15
+  width: 640
+  height: 480
+  fourcc: "MJPG"
+  latest_frame_buffer: true
+  opencl: false
+performance:
+  show_perf: true
+  model_gops_per_frame: 0.0
+  estimate_tops: true
 
 # --- Vehicle Simulation ---
 vehicle_speed_sim_enabled: true
