@@ -31,3 +31,7 @@ The intended landmark acceleration path is:
 4. Convert model outputs into the existing `DMS FaceLandmarkResult` shape.
 
 The placeholder `RKNNFaceLandmarkBackend` exists to reserve that integration point. Detection and postprocess will remain unimplemented until the exact model output layout is chosen.
+
+## Postprocessing Depends on the Model
+
+The RKNN runtime can validate that a model loads and produces tensors, but the actual landmark mapping depends on the selected model's output format. A model may emit normalized coordinate pairs, heatmaps, confidence scores, visibility flags, or a custom packed tensor. The DMS integration should only convert RKNN outputs into `FaceLandmarkResult` after that output contract is known.
