@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import copy
@@ -24,6 +24,7 @@ from ind_vias_dms.interface.dms_packet import serialize_dms_state  # noqa: E402
 from ind_vias_dms.utils.debug_trace import DebugTraceRecorder  # noqa: E402
 from ind_vias_dms.utils.jsonl_writer import JSONLWriter  # noqa: E402
 from ind_vias_dms.utils.latest_frame_capture import LatestFrameCapture  # noqa: E402
+from ind_vias_dms.utils.axon_face_box_tracker import AxonFaceBoxTracker  # noqa: E402
 from ind_vias_dms.utils.learning_memory import LearningMemoryWriter  # noqa: E402
 from ind_vias_dms.utils.perf_monitor import RuntimePerfMonitor  # noqa: E402
 from ind_vias_dms.utils.video_io import make_video_writer, open_video_source, resize_to_width  # noqa: E402
@@ -74,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disable-opencl", dest="opencl", action="store_false")
     parser.add_argument("--model-gops-per-frame", type=float, default=None)
     parser.add_argument("--show-perf", action="store_true", default=None)
+    parser.add_argument("--axon-face-box-tracker", action="store_true")
     parser.add_argument("--perf-jsonl", default=None)
     return parser
 
@@ -155,6 +157,7 @@ def main() -> None:
     last_inference_context = None
     latest_capture = None
     pending_latest_frame = None
+    axon_face_tracker = AxonFaceBoxTracker() if args.axon_face_box_tracker else None
     start_wall_s = time.time()
     last_latest_frame_id = -1
     if args.start_ms is not None:
@@ -246,6 +249,23 @@ def main() -> None:
                 state.frame_id = frame_id
                 context = last_inference_context
                 process_elapsed_ms = 0.0
+            if axon_face_tracker is not None:
+                if inference_ran:
+                    axon_face_tracker.update_from_detection(
+                        frame,
+                        context["face"].bbox,
+                        timestamp_ms,
+                    )
+                else:
+                    tracked_box = axon_face_tracker.track(frame, timestamp_ms)
+                    if tracked_box is not None:
+                        context["face"].bbox = tracked_box.bbox
+                        # AXON fast-live mode: the bbox is updated by lightweight
+                        # optical-flow tracking, but FaceMesh landmarks are from
+                        # the previous full inference frame. Hide stale landmarks
+                        # so dots do not trail behind the moving face.
+                        context["face"].landmarks_px = {}
+
             state.gaze.calibration_source = road_calibration_source
             live_output_fps = _select_output_fps(
                 args.live_output_fps,

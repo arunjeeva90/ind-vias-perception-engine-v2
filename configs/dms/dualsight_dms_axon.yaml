@@ -19,23 +19,23 @@
 
 # --- Face Detection ---
 face_backend: mediapipe
-max_num_faces: 4
+max_num_faces: 1
 nir_mode: auto
-enable_nir_preprocessing: true
-nir_clahe_enabled: true
+enable_nir_preprocessing: false
+nir_clahe_enabled: false
 nir_clahe_clip_limit: 2.0
 nir_clahe_tile_grid_size: 8
 nir_gamma: 1.15
 nir_equalize_hist_fallback: true
-face_detection_upscale: 1.5
+face_detection_upscale: 1.0
 min_face_box_area_norm: 0.003
 driver_min_face_area_norm: 0.008
-driver_min_landmark_count: 120
-driver_min_face_completeness_score: 0.55
-driver_min_landmark_coverage_score: 0.45
+driver_min_landmark_count: 80
+driver_min_face_completeness_score: 0.40
+driver_min_landmark_coverage_score: 0.30
 driver_face_aspect_min: 0.45
 driver_face_aspect_max: 1.35
-enable_strict_driver_face_validation: true
+enable_strict_driver_face_validation: false
 
 # --- Face Proposal ---
 face_proposal_backend: mediapipe_face_detection
@@ -44,15 +44,15 @@ face_proposal_min_confidence: 0.35
 face_mesh_on_crops: true
 face_crop_margin: 0.25
 face_crop_min_size_px: 80
-face_crop_upscale: 2.0
+face_crop_upscale: 1.0
 show_raw_face_proposals: false
 show_rejected_face_proposals: false
 show_debug_proposal_boxes: false
 
 # --- Webcam Stability ---
-webcam_face_mesh_dropout_hold_ms: 1000
-webcam_recent_valid_track_ms: 1500
-webcam_proposal_visible_hold_ms: 1200
+webcam_face_mesh_dropout_hold_ms: 2000
+webcam_recent_valid_track_ms: 2500
+webcam_proposal_visible_hold_ms: 2500
 webcam_night_mode_stability_enabled: true
 
 # --- Night Mode ---
@@ -72,7 +72,7 @@ monitor_recovery_hold_ms: 400
 # --- Frame Processing ---
 # AXON CPU optimization: reduced from 960 to 640 for faster processing
 # Increase to 720 or 800 if face detection accuracy drops at distance
-frame_resize_width: 640
+frame_resize_width: 480
 output_fps: 15
 runtime:
   camera_fps: 20
@@ -99,7 +99,7 @@ speed_adjust_step_kph: 1
 speed_adjust_fast_step_kph: 5
 dms_activation_banner_ms: 2000
 standby_suppresses_alerts: true
-vehicle_monitor_window_enabled: true
+vehicle_monitor_window_enabled: false
 indicator_sim_enabled: true
 
 # --- Mirror Check ---
@@ -291,8 +291,8 @@ drowsiness_warning_release_ms: 1200
 # --- Overlay ---
 max_axis_length_px: 80
 max_gaze_vector_length_px: 100
-draw_pose_axes: true
-draw_gaze_vector: true
+draw_pose_axes: false
+draw_gaze_vector: false
 
 # --- Vehicle Layout ---
 vehicle_layout: RHD
@@ -341,8 +341,8 @@ suppress_window_external_faces: true
 suppress_headrest_bag_false_occupants: true
 
 # --- Driver Tracking ---
-driver_track_hold_ms: 1500
-driver_session_hold_ms: 5000
+driver_track_hold_ms: 3000
+driver_session_hold_ms: 8000
 driver_reid_center_distance_threshold: 0.18
 driver_reid_area_ratio_min: 0.45
 driver_reid_area_ratio_max: 2.2
@@ -383,7 +383,7 @@ perclos_60s_medium_threshold: 0.25
 perclos_60s_high_threshold: 0.40
 
 # --- Display ---
-draw_all_faces: true
+draw_all_faces: false
 draw_only_driver_pose: true
 road_gaze_calibrated: false
 drowsiness_perclos_medium: 0.25
@@ -440,7 +440,7 @@ repeated_head_nod_warning_count: 3
 
 # --- Overlay Settings ---
 overlay_enabled: true
-telemetry_panel_enabled: true
+telemetry_panel_enabled: false
 # status_window_enabled controlled by CLI --status-window flag
 status_window_enabled: false
 overlay_panel_embedded: true

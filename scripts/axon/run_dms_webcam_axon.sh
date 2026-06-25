@@ -35,6 +35,7 @@ if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then
 fi
 DMS_EXTRA_ARGS=("$@")
 
+
 # Determine project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -81,29 +82,45 @@ fi
 # Build display arguments
 DISPLAY_ARGS=()
 if [ "${HEADLESS:-0}" != "1" ]; then
-    DISPLAY_ARGS=(--display --status-window)
-    echo "[INFO] Display mode enabled (--display --status-window)"
+    if [ "${FAST_LIVE:-0}" = "1" ]; then
+        DISPLAY_ARGS=(--display)
+        echo "[INFO] FAST_LIVE display mode enabled (--display only, no status window)"
+    else
+        DISPLAY_ARGS=(--display --status-window)
+        echo "[INFO] Display mode enabled (--display --status-window)"
+    fi
 else
     echo "[INFO] Headless mode (no display window)"
 fi
 
-echo ""
 echo "[INFO] Starting DMS..."
 echo ""
 
 # Run DMS demo
+RUN_ARGS=(
+    --camera "$CAMERA_INDEX"
+    --config configs/dms/dualsight_dms_axon.yaml
+    --debug-overlay
+    "${DISPLAY_ARGS[@]}"
+    "${CABIN_ONNX_ARGS[@]}"
+)
+
+if [ "${FAST_LIVE:-0}" = "1" ]; then
+    echo "[INFO] FAST_LIVE=1 enabled: disabling output video and heavy logs."
+    RUN_ARGS+=(--axon-face-box-tracker)
+else
+    RUN_ARGS+=(
+        --output "$OUTPUT_DIR/webcam_output.mp4"
+        --jsonl "$OUTPUT_DIR/webcam_state.jsonl"
+        --debug-trace "$OUTPUT_DIR/webcam_trace.jsonl"
+        --event-log "$OUTPUT_DIR/webcam_events.csv"
+        --event-json "$OUTPUT_DIR/webcam_events.json"
+        --learning-memory "$OUTPUT_DIR/webcam_learning.jsonl"
+    )
+fi
+
 python apps/run_dms_demo.py \
-    --camera "$CAMERA_INDEX" \
-    --config configs/dms/dualsight_dms_axon.yaml \
-    --debug-overlay \
-    "${DISPLAY_ARGS[@]}" \
-    "${CABIN_ONNX_ARGS[@]}" \
-    --output "$OUTPUT_DIR/webcam_output.mp4" \
-    --jsonl "$OUTPUT_DIR/webcam_state.jsonl" \
-    --debug-trace "$OUTPUT_DIR/webcam_trace.jsonl" \
-    --event-log "$OUTPUT_DIR/webcam_events.csv" \
-    --event-json "$OUTPUT_DIR/webcam_events.json" \
-    --learning-memory "$OUTPUT_DIR/webcam_learning.jsonl" \
+    "${RUN_ARGS[@]}" \
     "${DMS_EXTRA_ARGS[@]}"
 
 echo ""
