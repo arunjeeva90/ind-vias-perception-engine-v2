@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 
-DEFAULT_INPUT_SIZE = (192, 192)
+DEFAULT_INPUT_SIZE = (160, 160)
 
 
 def parse_args() -> argparse.Namespace:
@@ -16,6 +16,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", required=True, type=Path, help="Input .rknn model path.")
     parser.add_argument("--image", required=True, type=Path, help="Input image path.")
+    parser.add_argument(
+        "--input-size",
+        nargs=2,
+        type=int,
+        metavar=("WIDTH", "HEIGHT"),
+        default=DEFAULT_INPUT_SIZE,
+        help="Model input size for image resize (default: 160 160).",
+    )
     return parser.parse_args()
 
 
@@ -24,7 +32,7 @@ def check_ret(ret: int, step: str) -> None:
         raise RuntimeError(f"{step} failed with RKNNLite return code {ret}")
 
 
-def load_image(image_path: Path) -> np.ndarray:
+def load_image(image_path: Path, input_size: tuple[int, int]) -> np.ndarray:
     try:
         import cv2  # type: ignore
     except ImportError as exc:
@@ -34,7 +42,7 @@ def load_image(image_path: Path) -> np.ndarray:
     if image_bgr is None:
         raise RuntimeError(f"Unable to read image: {image_path}")
 
-    width, height = DEFAULT_INPUT_SIZE
+    width, height = input_size
     image_bgr = cv2.resize(image_bgr, (width, height), interpolation=cv2.INTER_LINEAR)
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     return np.expand_dims(image_rgb, axis=0)
@@ -74,9 +82,10 @@ def main() -> int:
     print("========================================")
     print(f"Model:      {args.model}")
     print(f"Image:      {args.image}")
-    print(f"Input size: {DEFAULT_INPUT_SIZE[0]}x{DEFAULT_INPUT_SIZE[1]}")
+    input_size = tuple(args.input_size)
+    print(f"Input size: {input_size[0]}x{input_size[1]}")
 
-    input_tensor = load_image(args.image)
+    input_tensor = load_image(args.image, input_size)
     print(f"Input tensor: shape={input_tensor.shape} dtype={input_tensor.dtype}")
 
     rknn = RKNNLite()
