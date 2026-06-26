@@ -19,3 +19,13 @@ runs/
 outputs/
 examples/out_*.jpg
 examples/*.mp4
+# Local RKNN / AXON experiment artifacts
+.venv-rknn/
+outputs/
+examples/dms_face_crop.jpg
+models/dms/*.onnx
+models/dms/*.rknn
+models/dms/*.jpg
+models/dms/*.png
+AXON RKNN Landmark Live Demo_screenshot*.png
+configs/dms/*backup*.yaml

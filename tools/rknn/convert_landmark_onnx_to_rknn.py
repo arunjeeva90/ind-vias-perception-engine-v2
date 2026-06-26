@@ -70,7 +70,19 @@ def main() -> int:
         check_ret(rknn.config(target_platform=args.target_platform), "rknn.config")
 
         print("[2/4] Loading ONNX")
-        check_ret(rknn.load_onnx(model=str(args.onnx)), "rknn.load_onnx")
+        input_width, input_height = args.input_size
+        input_name = "images"
+        fixed_input_shape = [1, 3, input_height, input_width]
+
+        print(f"    Input override: {input_name} -> {fixed_input_shape}")
+        check_ret(
+            rknn.load_onnx(
+                model=str(args.onnx),
+                inputs=[input_name],
+                input_size_list=[fixed_input_shape],
+            ),
+            "rknn.load_onnx",
+        )
 
         print("[3/4] Building RKNN graph")
         check_ret(rknn.build(do_quantization=False), "rknn.build")
