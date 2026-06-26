@@ -44,6 +44,7 @@ def parse_args():
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fourcc", default="MJPG")
     parser.add_argument("--input-size", nargs=2, type=int, default=[160, 160])
+    parser.add_argument("--landmark-count", type=int, choices=[68, 106], default=68)
     parser.add_argument("--save-snapshot", default="outputs/rknn_live_snapshot.jpg")
     parser.add_argument("--perf-log", nargs="?", const="outputs/rknn_live_perf.csv", default=None)
     return parser.parse_args()
@@ -156,6 +157,7 @@ def main():
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     input_w, input_h = args.input_size
+    expected_landmark_values = args.landmark_count * 2
 
     yunet_model_path = Path(args.yunet_model)
     detector_name = args.detector
@@ -304,9 +306,12 @@ def main():
                             landmark_min = f"{float(np.min(landmarks)):.6f}"
                             landmark_max = f"{float(np.max(landmarks)):.6f}"
 
-                        if landmarks.size == 136 and landmarks_are_normalized(landmarks):
+                        if (
+                            landmarks.size == expected_landmark_values
+                            and landmarks_are_normalized(landmarks)
+                        ):
                             landmark_valid = True
-                            points = landmarks.reshape(68, 2)
+                            points = landmarks.reshape(args.landmark_count, 2)
 
                             crop_w = x2 - x1
                             crop_h = y2 - y1
@@ -320,7 +325,7 @@ def main():
                                 py = max(0, min(h - 1, py))
 
                                 cv2.circle(display, (px, py), 2, (0, 255, 0), -1)
-                        elif landmarks.size != 136:
+                        elif landmarks.size != expected_landmark_values:
                             cv2.putText(
                                 display,
                                 f"Unexpected landmark size: {landmarks.size}",
