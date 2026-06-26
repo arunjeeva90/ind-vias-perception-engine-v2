@@ -28,6 +28,9 @@ PERF_LOG_FIELDS = [
     "bbox_y2",
     "landmark_min",
     "landmark_max",
+    "roi_mode",
+    "selected_face_count",
+    "detected_face_count",
 ]
 
 
@@ -40,6 +43,16 @@ def parse_args():
     parser.add_argument("--allow-detector-fallback", action="store_true")
     parser.add_argument("--bbox-hold-ms", type=int, default=800)
     parser.add_argument("--bbox-margin", type=float, default=1.30)
+    parser.add_argument("--driver-roi", choices=["full", "left", "right"], default="full")
+    parser.add_argument(
+        "--driver-roi-custom",
+        nargs=4,
+        type=float,
+        metavar=("X1", "Y1", "X2", "Y2"),
+        default=None,
+        help="Optional normalized driver ROI overriding --driver-roi.",
+    )
+    parser.add_argument("--driver-track-hold-ms", type=int, default=1500)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fourcc", default="MJPG")
@@ -100,11 +113,12 @@ def detect_face_haar(frame, face_cascade, margin):
         minSize=(80, 80),
     )
 
-    if len(faces) > 0:
-        x, y, fw, fh = max(faces, key=lambda b: b[2] * b[3])
-        return clamp_expand_bbox((x, y, fw, fh), frame.shape, margin=margin)
-
-    return None
+    bboxes = []
+    for x, y, fw, fh in faces:
+        bbox = clamp_expand_bbox((x, y, fw, fh), frame.shape, margin=margin)
+        if bbox is not None:
+            bboxes.append(bbox)
+    return bboxes
 
 
 def detect_face_yunet(frame, yunet_detector, margin):
@@ -112,11 +126,15 @@ def detect_face_yunet(frame, yunet_detector, margin):
     yunet_detector.setInputSize((w, h))
     _, faces = yunet_detector.detect(frame)
     if faces is None or len(faces) == 0:
-        return None
+        return []
 
-    face = max(faces, key=lambda b: float(b[2]) * float(b[3]))
-    x, y, fw, fh = face[:4]
-    return clamp_expand_bbox((x, y, fw, fh), frame.shape, margin=margin)
+    bboxes = []
+    for face in faces:
+        x, y, fw, fh = face[:4]
+        bbox = clamp_expand_bbox((x, y, fw, fh), frame.shape, margin=margin)
+        if bbox is not None:
+            bboxes.append(bbox)
+    return bboxes
 
 
 def create_yunet_detector(model_path):
@@ -161,6 +179,77 @@ def landmarks_are_normalized(landmarks):
         return False
     inside = np.logical_and(landmarks >= -0.1, landmarks <= 1.1)
     return float(np.count_nonzero(inside)) / float(landmarks.size) >= 0.95
+
+
+def resolve_driver_roi(args, frame_shape):
+    h, w = frame_shape[:2]
+    if args.driver_roi_custom is not None:
+        nx1, ny1, nx2, ny2 = args.driver_roi_custom
+        roi_mode = "custom"
+    elif args.driver_roi == "left":
+        nx1, ny1, nx2, ny2 = 0.0, 0.0, 0.5, 1.0
+        roi_mode = "left"
+    elif args.driver_roi == "right":
+        nx1, ny1, nx2, ny2 = 0.5, 0.0, 1.0, 1.0
+        roi_mode = "right"
+    else:
+        nx1, ny1, nx2, ny2 = 0.0, 0.0, 1.0, 1.0
+        roi_mode = "full"
+
+    nx1 = max(0.0, min(1.0, nx1))
+    ny1 = max(0.0, min(1.0, ny1))
+    nx2 = max(0.0, min(1.0, nx2))
+    ny2 = max(0.0, min(1.0, ny2))
+    if nx2 <= nx1 or ny2 <= ny1:
+        raise SystemExit(
+            "--driver-roi-custom must define X1 Y1 X2 Y2 with X2 > X1 and Y2 > Y1"
+        )
+
+    x1 = int(round(nx1 * w))
+    y1 = int(round(ny1 * h))
+    x2 = int(round(nx2 * w))
+    y2 = int(round(ny2 * h))
+    return (x1, y1, x2, y2), roi_mode
+
+
+def bbox_center(bbox):
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+
+
+def bbox_area(bbox):
+    x1, y1, x2, y2 = bbox
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
+def center_inside_roi(bbox, roi):
+    cx, cy = bbox_center(bbox)
+    x1, y1, x2, y2 = roi
+    return x1 <= cx <= x2 and y1 <= cy <= y2
+
+
+def select_driver_bbox(candidates, roi, previous_bbox, previous_t, now, hold_ms):
+    roi_candidates = [bbox for bbox in candidates if center_inside_roi(bbox, roi)]
+    previous_is_recent = (
+        previous_bbox is not None and (now - previous_t) * 1000.0 <= hold_ms
+    )
+
+    if roi_candidates:
+        if previous_is_recent:
+            pcx, pcy = bbox_center(previous_bbox)
+            selected = min(
+                roi_candidates,
+                key=lambda bbox: (bbox_center(bbox)[0] - pcx) ** 2
+                + (bbox_center(bbox)[1] - pcy) ** 2,
+            )
+        else:
+            selected = max(roi_candidates, key=bbox_area)
+        return selected, "face", len(roi_candidates)
+
+    if previous_is_recent:
+        return previous_bbox, "hold", 0
+
+    return None, "no-face", 0
 
 
 def open_perf_log(path):
@@ -259,8 +348,8 @@ def main():
     fps_t0 = time.time()
     fps = 0.0
     infer_ms = 0.0
-    last_good_bbox = None
-    last_good_bbox_t = 0.0
+    last_driver_bbox = None
+    last_driver_bbox_t = 0.0
 
     try:
         while True:
@@ -278,33 +367,44 @@ def main():
             landmark_min = ""
             landmark_max = ""
             coord_mode_used = args.landmark_coord_mode
+            selected_face_count = 0
+            detected_face_count = 0
 
             display = frame.copy()
             h, w = frame.shape[:2]
+            driver_roi, roi_mode = resolve_driver_roi(args, frame.shape)
 
             detector_t0 = time.time()
             if detector_name == "yunet":
-                detected_bbox = detect_face_yunet(frame, yunet_detector, args.bbox_margin)
+                detected_bboxes = detect_face_yunet(frame, yunet_detector, args.bbox_margin)
             else:
-                detected_bbox = detect_face_haar(frame, face_cascade, args.bbox_margin)
+                detected_bboxes = detect_face_haar(frame, face_cascade, args.bbox_margin)
             detector_ms = (time.time() - detector_t0) * 1000.0
+            detected_face_count = len(detected_bboxes)
 
             now = time.time()
-            if detected_bbox is not None:
-                bbox = detected_bbox
-                crop_mode = "face"
-                last_good_bbox = bbox
-                last_good_bbox_t = now
-            elif (
-                last_good_bbox is not None
-                and (now - last_good_bbox_t) * 1000.0 <= args.bbox_hold_ms
-            ):
-                bbox = last_good_bbox
-                crop_mode = "hold"
-            else:
-                bbox = None
-                crop_mode = "no-face"
+            bbox, crop_mode, _roi_face_count = select_driver_bbox(
+                detected_bboxes,
+                driver_roi,
+                last_driver_bbox,
+                last_driver_bbox_t,
+                now,
+                args.driver_track_hold_ms,
+            )
+            selected_face_count = 1 if bbox is not None else 0
+            if crop_mode == "face":
+                last_driver_bbox = bbox
+                last_driver_bbox_t = now
+            elif crop_mode == "no-face":
                 infer_ms = 0.0
+
+            cv2.rectangle(
+                display,
+                (driver_roi[0], driver_roi[1]),
+                (driver_roi[2], driver_roi[3]),
+                (255, 180, 0),
+                2,
+            )
 
             if bbox is None:
                 cv2.putText(
@@ -406,7 +506,8 @@ def main():
             cv2.putText(
                 display,
                 (
-                    f"RKNN landmarks | detector={detector_name} | crop={crop_mode} | "
+                    f"RKNN landmarks | detector={detector_name} | roi={roi_mode} | "
+                    f"track={crop_mode} | "
                     f"pts={args.landmark_count} | "
                     f"lm={'valid' if landmark_valid else 'invalid'} | "
                     f"coord={coord_mode_used} | FPS={fps:.1f} | infer={infer_ms:.1f} ms"
@@ -445,6 +546,9 @@ def main():
                         "bbox_y2": bbox_y2,
                         "landmark_min": landmark_min,
                         "landmark_max": landmark_max,
+                        "roi_mode": roi_mode,
+                        "selected_face_count": selected_face_count,
+                        "detected_face_count": detected_face_count,
                     }
                 )
                 if frame_id % 30 == 0:
