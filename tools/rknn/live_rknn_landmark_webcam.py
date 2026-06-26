@@ -2,12 +2,33 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 from rknnlite.api import RKNNLite
+
+
+PERF_LOG_FIELDS = [
+    "timestamp_ms",
+    "frame_id",
+    "detector",
+    "crop_mode",
+    "face_valid",
+    "landmark_valid",
+    "detector_ms",
+    "inference_ms",
+    "total_frame_ms",
+    "fps",
+    "bbox_x1",
+    "bbox_y1",
+    "bbox_x2",
+    "bbox_y2",
+    "landmark_min",
+    "landmark_max",
+]
 
 
 def parse_args():
@@ -24,6 +45,7 @@ def parse_args():
     parser.add_argument("--fourcc", default="MJPG")
     parser.add_argument("--input-size", nargs=2, type=int, default=[160, 160])
     parser.add_argument("--save-snapshot", default="outputs/rknn_live_snapshot.jpg")
+    parser.add_argument("--perf-log", nargs="?", const="outputs/rknn_live_perf.csv", default=None)
     return parser.parse_args()
 
 
@@ -111,6 +133,18 @@ def landmarks_are_normalized(landmarks):
     return float(np.min(landmarks)) >= -0.25 and float(np.max(landmarks)) <= 1.25
 
 
+def open_perf_log(path):
+    log_path = Path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not log_path.exists() or log_path.stat().st_size == 0
+    handle = log_path.open("a", newline="")
+    writer = csv.DictWriter(handle, fieldnames=PERF_LOG_FIELDS)
+    if write_header:
+        writer.writeheader()
+        handle.flush()
+    return handle, writer
+
+
 def main():
     args = parse_args()
 
@@ -183,7 +217,14 @@ def main():
     print("[INFO] Camera opened.")
     print("[INFO] Press q to quit, s to save snapshot.")
 
+    perf_handle = None
+    perf_writer = None
+    if args.perf_log:
+        perf_handle, perf_writer = open_perf_log(args.perf_log)
+        print(f"[INFO] Writing performance CSV: {args.perf_log}")
+
     frame_count = 0
+    frame_id = 0
     fps_t0 = time.time()
     fps = 0.0
     infer_ms = 0.0
@@ -197,13 +238,24 @@ def main():
                 print("[WARN] Failed to read frame")
                 continue
 
+            frame_t0 = time.time()
+            timestamp_ms = int(round(frame_t0 * 1000.0))
+            frame_id += 1
+            detector_ms = 0.0
+            infer_ms = 0.0
+            landmark_valid = False
+            landmark_min = ""
+            landmark_max = ""
+
             display = frame.copy()
             h, w = frame.shape[:2]
 
+            detector_t0 = time.time()
             if detector_name == "yunet":
                 detected_bbox = detect_face_yunet(frame, yunet_detector, args.bbox_margin)
             else:
                 detected_bbox = detect_face_haar(frame, face_cascade, args.bbox_margin)
+            detector_ms = (time.time() - detector_t0) * 1000.0
 
             now = time.time()
             if detected_bbox is not None:
@@ -248,8 +300,12 @@ def main():
 
                     if outputs is not None and len(outputs) >= 3:
                         landmarks = np.asarray(outputs[2]).reshape(-1)
+                        if landmarks.size > 0 and np.all(np.isfinite(landmarks)):
+                            landmark_min = f"{float(np.min(landmarks)):.6f}"
+                            landmark_max = f"{float(np.max(landmarks)):.6f}"
 
                         if landmarks.size == 136 and landmarks_are_normalized(landmarks):
+                            landmark_valid = True
                             points = landmarks.reshape(68, 2)
 
                             crop_w = x2 - x1
@@ -319,6 +375,37 @@ def main():
                 cv2.LINE_AA,
             )
 
+            total_frame_ms = (time.time() - frame_t0) * 1000.0
+
+            if perf_writer is not None:
+                if bbox is None:
+                    bbox_x1 = bbox_y1 = bbox_x2 = bbox_y2 = ""
+                else:
+                    bbox_x1, bbox_y1, bbox_x2, bbox_y2 = bbox
+
+                perf_writer.writerow(
+                    {
+                        "timestamp_ms": timestamp_ms,
+                        "frame_id": frame_id,
+                        "detector": detector_name,
+                        "crop_mode": crop_mode,
+                        "face_valid": int(bbox is not None),
+                        "landmark_valid": int(landmark_valid),
+                        "detector_ms": f"{detector_ms:.3f}",
+                        "inference_ms": f"{infer_ms:.3f}",
+                        "total_frame_ms": f"{total_frame_ms:.3f}",
+                        "fps": f"{fps:.3f}",
+                        "bbox_x1": bbox_x1,
+                        "bbox_y1": bbox_y1,
+                        "bbox_x2": bbox_x2,
+                        "bbox_y2": bbox_y2,
+                        "landmark_min": landmark_min,
+                        "landmark_max": landmark_max,
+                    }
+                )
+                if frame_id % 30 == 0:
+                    perf_handle.flush()
+
             cv2.imshow("AXON RKNN Landmark Live Demo", display)
 
             key = cv2.waitKey(1) & 0xFF
@@ -332,6 +419,9 @@ def main():
         cap.release()
         cv2.destroyAllWindows()
         rknn.release()
+        if perf_handle is not None:
+            perf_handle.flush()
+            perf_handle.close()
         print("[INFO] Released camera and RKNN runtime")
 
 
