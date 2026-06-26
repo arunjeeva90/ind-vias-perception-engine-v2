@@ -31,6 +31,10 @@ PERF_LOG_FIELDS = [
     "roi_mode",
     "selected_face_count",
     "detected_face_count",
+    "yaw_proxy",
+    "pitch_proxy",
+    "left_eye_open_proxy",
+    "right_eye_open_proxy",
 ]
 
 
@@ -58,6 +62,8 @@ def parse_args():
     parser.add_argument("--fourcc", default="MJPG")
     parser.add_argument("--input-size", nargs=2, type=int, default=[160, 160])
     parser.add_argument("--landmark-count", type=int, choices=[68, 106], default=68)
+    parser.add_argument("--draw-landmark-indices", action="store_true")
+    parser.add_argument("--landmark-index-step", type=int, default=1)
     parser.add_argument(
         "--landmark-coord-mode",
         choices=["auto", "zero_one", "minus_one_one"],
@@ -65,6 +71,13 @@ def parse_args():
     )
     parser.add_argument("--save-snapshot", default="outputs/rknn_live_snapshot.jpg")
     parser.add_argument("--perf-log", nargs="?", const="outputs/rknn_live_perf.csv", default=None)
+    parser.add_argument("--show-dms-signals", action="store_true")
+    parser.add_argument(
+        "--eye-calib-log",
+        nargs="?",
+        const="outputs/rknn_eye_calib_landmarks.csv",
+        default=None,
+    )
     return parser.parse_args()
 
 
@@ -252,6 +265,112 @@ def select_driver_bbox(candidates, roi, previous_bbox, previous_t, now, hold_ms)
     return None, "no-face", 0
 
 
+def eye_open_proxy_from_indices(points, indices):
+    eye = points[indices]
+    eye_width = float(np.max(eye[:, 0]) - np.min(eye[:, 0]))
+    if eye_width <= 1e-6:
+        return 0.0
+    eye_height = float(np.max(eye[:, 1]) - np.min(eye[:, 1]))
+    return eye_height / eye_width
+
+
+def compute_eye_open_from_group(points, indices):
+    indices = np.asarray(indices, dtype=np.int32)
+    if indices.size == 0 or int(np.max(indices)) >= points.shape[0]:
+        return 0.0
+
+    group = points[indices]
+    group_width = float(np.max(group[:, 0]) - np.min(group[:, 0]))
+    if group_width <= 1e-6:
+        return 0.0
+    group_height = float(np.max(group[:, 1]) - np.min(group[:, 1]))
+    return group_height / group_width
+
+
+def compute_eye_open_from_pair(points, idx_a, idx_b):
+    if max(idx_a, idx_b) >= points.shape[0]:
+        return 0.0
+    return float(np.linalg.norm(points[idx_a] - points[idx_b]))
+
+
+def eye_open_proxy_from_region(points, face_min, face_size, side):
+    min_x, min_y = face_min
+    width, height = face_size
+    if width <= 1e-6 or height <= 1e-6:
+        return 0.0
+
+    center_x = min_x + width * 0.5
+    if side == "left":
+        x_min, x_max = min_x + width * 0.12, center_x
+    else:
+        x_min, x_max = center_x, min_x + width * 0.88
+    y_min, y_max = min_y + height * 0.20, min_y + height * 0.58
+
+    mask = (
+        (points[:, 0] >= x_min)
+        & (points[:, 0] <= x_max)
+        & (points[:, 1] >= y_min)
+        & (points[:, 1] <= y_max)
+    )
+    region = points[mask]
+    if region.shape[0] < 2:
+        return 0.0
+
+    region_width = float(np.max(region[:, 0]) - np.min(region[:, 0]))
+    if region_width <= 1e-6:
+        return 0.0
+    region_height = float(np.max(region[:, 1]) - np.min(region[:, 1]))
+    return region_height / region_width
+
+
+def compute_dms_signal_proxies(points, landmark_count):
+    min_xy = np.min(points, axis=0)
+    max_xy = np.max(points, axis=0)
+    size = max_xy - min_xy
+    center = (min_xy + max_xy) * 0.5
+
+    face_width_norm = float(size[0])
+    face_height_norm = float(size[1])
+    signals = {
+        "face_center_x": float(center[0]),
+        "face_center_y": float(center[1]),
+        "face_width_norm": face_width_norm,
+        "face_height_norm": face_height_norm,
+        "yaw_proxy": float((center[0] - 0.5) * 2.0),
+        "pitch_proxy": float((center[1] - 0.5) * 2.0),
+        "left_eye_open_proxy": 0.0,
+        "right_eye_open_proxy": 0.0,
+    }
+
+    if landmark_count == 106 and points.shape[0] >= 106:
+        signals["left_eye_open_proxy"] = compute_eye_open_from_pair(points, 33, 40)
+        signals["right_eye_open_proxy"] = compute_eye_open_from_pair(points, 87, 94)
+    elif landmark_count == 68 and points.shape[0] >= 48:
+        signals["left_eye_open_proxy"] = eye_open_proxy_from_indices(
+            points,
+            np.array([36, 37, 38, 39, 40, 41]),
+        )
+        signals["right_eye_open_proxy"] = eye_open_proxy_from_indices(
+            points,
+            np.array([42, 43, 44, 45, 46, 47]),
+        )
+    else:
+        signals["left_eye_open_proxy"] = eye_open_proxy_from_region(
+            points,
+            min_xy,
+            size,
+            "left",
+        )
+        signals["right_eye_open_proxy"] = eye_open_proxy_from_region(
+            points,
+            min_xy,
+            size,
+            "right",
+        )
+
+    return signals
+
+
 def open_perf_log(path):
     log_path = Path(path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -262,6 +381,35 @@ def open_perf_log(path):
         writer.writeheader()
         handle.flush()
     return handle, writer
+
+
+def open_eye_calib_log(path, landmark_count):
+    log_path = Path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    fields = ["timestamp_ms", "label", "frame_id", "landmark_count"]
+    for idx in range(landmark_count):
+        fields.extend([f"x{idx}", f"y{idx}"])
+
+    write_header = not log_path.exists() or log_path.stat().st_size == 0
+    handle = log_path.open("a", newline="")
+    writer = csv.DictWriter(handle, fieldnames=fields)
+    if write_header:
+        writer.writeheader()
+        handle.flush()
+    return handle, writer
+
+
+def write_eye_calib_sample(writer, timestamp_ms, label, frame_id, points):
+    row = {
+        "timestamp_ms": timestamp_ms,
+        "label": label,
+        "frame_id": frame_id,
+        "landmark_count": points.shape[0],
+    }
+    for idx, (x, y) in enumerate(points):
+        row[f"x{idx}"] = f"{float(x):.8f}"
+        row[f"y{idx}"] = f"{float(y):.8f}"
+    writer.writerow(row)
 
 
 def main():
@@ -276,6 +424,7 @@ def main():
 
     input_w, input_h = args.input_size
     expected_landmark_values = args.landmark_count * 2
+    landmark_index_step = max(1, args.landmark_index_step)
 
     yunet_model_path = Path(args.yunet_model)
     detector_name = args.detector
@@ -343,6 +492,16 @@ def main():
         perf_handle, perf_writer = open_perf_log(args.perf_log)
         print(f"[INFO] Writing performance CSV: {args.perf_log}")
 
+    eye_calib_handle = None
+    eye_calib_writer = None
+    if args.eye_calib_log:
+        eye_calib_handle, eye_calib_writer = open_eye_calib_log(
+            args.eye_calib_log,
+            args.landmark_count,
+        )
+        print(f"[INFO] Writing eye calibration samples: {args.eye_calib_log}")
+        print("[INFO] Press o for open-eye sample, c for closed-eye sample.")
+
     frame_count = 0
     frame_id = 0
     fps_t0 = time.time()
@@ -369,6 +528,8 @@ def main():
             coord_mode_used = args.landmark_coord_mode
             selected_face_count = 0
             detected_face_count = 0
+            dms_signals = None
+            latest_valid_points = None
 
             display = frame.copy()
             h, w = frame.shape[:2]
@@ -447,6 +608,12 @@ def main():
                         if landmarks_are_normalized(decoded_landmarks):
                             landmark_valid = True
                             points = decoded_landmarks.reshape(args.landmark_count, 2)
+                            latest_valid_points = points.copy()
+                            if args.show_dms_signals:
+                                dms_signals = compute_dms_signal_proxies(
+                                    points,
+                                    args.landmark_count,
+                                )
 
                             crop_w = x2 - x1
                             crop_h = y2 - y1
@@ -459,6 +626,20 @@ def main():
                                 py = max(0, min(h - 1, py))
 
                                 cv2.circle(display, (px, py), 2, (0, 255, 0), -1)
+                                if (
+                                    args.draw_landmark_indices
+                                    and idx % landmark_index_step == 0
+                                ):
+                                    cv2.putText(
+                                        display,
+                                        str(idx),
+                                        (px + 3, py - 3),
+                                        cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.28,
+                                        (255, 255, 255),
+                                        1,
+                                        cv2.LINE_AA,
+                                    )
                         else:
                             cv2.putText(
                                 display,
@@ -520,6 +701,23 @@ def main():
                 cv2.LINE_AA,
             )
 
+            if args.show_dms_signals and dms_signals is not None:
+                cv2.putText(
+                    display,
+                    (
+                        f"yawP={dms_signals['yaw_proxy']:.2f} "
+                        f"pitchP={dms_signals['pitch_proxy']:.2f} "
+                        f"eyeA={dms_signals['left_eye_open_proxy']:.2f} "
+                        f"eyeB={dms_signals['right_eye_open_proxy']:.2f}"
+                    ),
+                    (20, 58),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
             total_frame_ms = (time.time() - frame_t0) * 1000.0
 
             if perf_writer is not None:
@@ -549,6 +747,26 @@ def main():
                         "roi_mode": roi_mode,
                         "selected_face_count": selected_face_count,
                         "detected_face_count": detected_face_count,
+                        "yaw_proxy": (
+                            f"{dms_signals['yaw_proxy']:.6f}"
+                            if dms_signals is not None
+                            else ""
+                        ),
+                        "pitch_proxy": (
+                            f"{dms_signals['pitch_proxy']:.6f}"
+                            if dms_signals is not None
+                            else ""
+                        ),
+                        "left_eye_open_proxy": (
+                            f"{dms_signals['left_eye_open_proxy']:.6f}"
+                            if dms_signals is not None
+                            else ""
+                        ),
+                        "right_eye_open_proxy": (
+                            f"{dms_signals['right_eye_open_proxy']:.6f}"
+                            if dms_signals is not None
+                            else ""
+                        ),
                     }
                 )
                 if frame_id % 30 == 0:
@@ -560,6 +778,25 @@ def main():
             if key == ord("s"):
                 cv2.imwrite(str(save_path), display)
                 print(f"[OK] Saved snapshot: {save_path}")
+            elif key in (ord("o"), ord("c")):
+                label = "open" if key == ord("o") else "closed"
+                if eye_calib_writer is None:
+                    print("[WARN] Eye calibration log is not enabled. Pass --eye-calib-log.")
+                elif latest_valid_points is None:
+                    print(f"[WARN] No valid landmarks to save for label={label}")
+                else:
+                    write_eye_calib_sample(
+                        eye_calib_writer,
+                        timestamp_ms,
+                        label,
+                        frame_id,
+                        latest_valid_points,
+                    )
+                    eye_calib_handle.flush()
+                    print(
+                        f"[OK] Saved eye calibration sample: "
+                        f"label={label}, frame_id={frame_id}, points={args.landmark_count}"
+                    )
             elif key == ord("q"):
                 break
 
@@ -570,6 +807,9 @@ def main():
         if perf_handle is not None:
             perf_handle.flush()
             perf_handle.close()
+        if eye_calib_handle is not None:
+            eye_calib_handle.flush()
+            eye_calib_handle.close()
         print("[INFO] Released camera and RKNN runtime")
 
 
