@@ -12,6 +12,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--onnx", required=True, type=Path, help="Input ONNX model path.")
     parser.add_argument("--output", required=True, type=Path, help="Output RKNN model path.")
     parser.add_argument(
+        "--input-name",
+        default=None,
+        help="Optional ONNX graph input name. Defaults to the first graph input.",
+    )
+    parser.add_argument(
         "--target-platform",
         default="rk3588",
         help="RKNN target platform (default: rk3588).",
@@ -38,6 +43,23 @@ def check_ret(ret: int, step: str) -> None:
         raise RuntimeError(f"{step} failed with RKNN return code {ret}")
 
 
+def resolve_input_name(onnx_path: Path, requested_input_name: str | None) -> str:
+    if requested_input_name:
+        return requested_input_name
+
+    try:
+        import onnx  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "onnx is unavailable. Install ONNX or pass --input-name explicitly."
+        ) from exc
+
+    model = onnx.load(str(onnx_path))
+    if not model.graph.input:
+        raise RuntimeError(f"ONNX model has no graph inputs: {onnx_path}")
+    return model.graph.input[0].name
+
+
 def main() -> int:
     args = parse_args()
 
@@ -45,6 +67,9 @@ def main() -> int:
         raise FileNotFoundError(f"ONNX model not found: {args.onnx}")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    input_width, input_height = args.input_size
+    input_name = resolve_input_name(args.onnx, args.input_name)
+    fixed_input_shape = [1, 3, input_height, input_width]
 
     try:
         from rknn.api import RKNN  # type: ignore
@@ -60,6 +85,8 @@ def main() -> int:
     print(f"Output:          {args.output}")
     print(f"Target platform: {args.target_platform}")
     print(f"Input size:      {args.input_size[0]}x{args.input_size[1]}")
+    print(f"Input name:      {input_name}")
+    print(f"Fixed shape:     {fixed_input_shape}")
     print("Quantization:    disabled for first FP16/FP32 PoC")
     if args.dataset is not None:
         print(f"Dataset:         {args.dataset} (not used while quantization is disabled)")
@@ -70,9 +97,6 @@ def main() -> int:
         check_ret(rknn.config(target_platform=args.target_platform), "rknn.config")
 
         print("[2/4] Loading ONNX")
-        input_width, input_height = args.input_size
-        input_name = "images"
-        fixed_input_shape = [1, 3, input_height, input_width]
 
         print(f"    Input override: {input_name} -> {fixed_input_shape}")
         check_ret(

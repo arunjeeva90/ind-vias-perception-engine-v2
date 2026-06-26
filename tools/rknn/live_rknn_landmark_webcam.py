@@ -45,6 +45,11 @@ def parse_args():
     parser.add_argument("--fourcc", default="MJPG")
     parser.add_argument("--input-size", nargs=2, type=int, default=[160, 160])
     parser.add_argument("--landmark-count", type=int, choices=[68, 106], default=68)
+    parser.add_argument(
+        "--landmark-coord-mode",
+        choices=["auto", "zero_one", "minus_one_one"],
+        default="auto",
+    )
     parser.add_argument("--save-snapshot", default="outputs/rknn_live_snapshot.jpg")
     parser.add_argument("--perf-log", nargs="?", const="outputs/rknn_live_perf.csv", default=None)
     return parser.parse_args()
@@ -127,11 +132,35 @@ def create_yunet_detector(model_path):
     )
 
 
+def select_landmark_tensor(outputs, expected_size):
+    if outputs is None:
+        return None
+    for output in outputs:
+        landmarks = np.asarray(output).reshape(-1)
+        if landmarks.size == expected_size:
+            return landmarks
+    return None
+
+
+def resolve_landmark_coord_mode(raw_landmarks, requested_mode):
+    if requested_mode != "auto":
+        return requested_mode
+    if float(np.min(raw_landmarks)) < -0.05:
+        return "minus_one_one"
+    return "zero_one"
+
+
+def decode_landmarks(raw_landmarks, coord_mode):
+    if coord_mode == "minus_one_one":
+        return (raw_landmarks + 1.0) * 0.5
+    return raw_landmarks
+
+
 def landmarks_are_normalized(landmarks):
-    finite = np.isfinite(landmarks)
-    if not np.all(finite):
+    if not np.all(np.isfinite(landmarks)):
         return False
-    return float(np.min(landmarks)) >= -0.25 and float(np.max(landmarks)) <= 1.25
+    inside = np.logical_and(landmarks >= -0.1, landmarks <= 1.1)
+    return float(np.count_nonzero(inside)) / float(landmarks.size) >= 0.95
 
 
 def open_perf_log(path):
@@ -248,6 +277,7 @@ def main():
             landmark_valid = False
             landmark_min = ""
             landmark_max = ""
+            coord_mode_used = args.landmark_coord_mode
 
             display = frame.copy()
             h, w = frame.shape[:2]
@@ -300,24 +330,28 @@ def main():
                     outputs = rknn.inference(inputs=[input_tensor])
                     infer_ms = (time.time() - t0) * 1000.0
 
-                    if outputs is not None and len(outputs) >= 3:
-                        landmarks = np.asarray(outputs[2]).reshape(-1)
-                        if landmarks.size > 0 and np.all(np.isfinite(landmarks)):
-                            landmark_min = f"{float(np.min(landmarks)):.6f}"
-                            landmark_max = f"{float(np.max(landmarks)):.6f}"
+                    landmarks = select_landmark_tensor(outputs, expected_landmark_values)
+                    if landmarks is not None:
+                        if np.all(np.isfinite(landmarks)):
+                            coord_mode_used = resolve_landmark_coord_mode(
+                                landmarks,
+                                args.landmark_coord_mode,
+                            )
+                            decoded_landmarks = decode_landmarks(landmarks, coord_mode_used)
+                            if np.all(np.isfinite(decoded_landmarks)):
+                                landmark_min = f"{float(np.min(decoded_landmarks)):.6f}"
+                                landmark_max = f"{float(np.max(decoded_landmarks)):.6f}"
+                        else:
+                            decoded_landmarks = landmarks
 
-                        if (
-                            landmarks.size == expected_landmark_values
-                            and landmarks_are_normalized(landmarks)
-                        ):
+                        if landmarks_are_normalized(decoded_landmarks):
                             landmark_valid = True
-                            points = landmarks.reshape(args.landmark_count, 2)
+                            points = decoded_landmarks.reshape(args.landmark_count, 2)
 
                             crop_w = x2 - x1
                             crop_h = y2 - y1
 
                             for idx, (nx, ny) in enumerate(points):
-                                # Outputs appear normalized 0..1 based on earlier min/max.
                                 px = int(round(x1 + float(nx) * crop_w))
                                 py = int(round(y1 + float(ny) * crop_h))
 
@@ -325,20 +359,10 @@ def main():
                                 py = max(0, min(h - 1, py))
 
                                 cv2.circle(display, (px, py), 2, (0, 255, 0), -1)
-                        elif landmarks.size != expected_landmark_values:
-                            cv2.putText(
-                                display,
-                                f"Unexpected landmark size: {landmarks.size}",
-                                (20, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.6,
-                                (0, 0, 255),
-                                2,
-                            )
                         else:
                             cv2.putText(
                                 display,
-                                "Landmarks outside normalized range",
+                                f"Landmarks outside normalized range ({coord_mode_used})",
                                 (20, 80),
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 0.6,
@@ -346,6 +370,19 @@ def main():
                                 2,
                                 cv2.LINE_AA,
                             )
+                    else:
+                        output_sizes = []
+                        if outputs is not None:
+                            output_sizes = [np.asarray(output).size for output in outputs]
+                        cv2.putText(
+                            display,
+                            f"No landmark tensor size {expected_landmark_values}: {output_sizes}",
+                            (20, 80),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (0, 0, 255),
+                            2,
+                        )
                     cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 else:
                     cv2.putText(
@@ -370,7 +407,9 @@ def main():
                 display,
                 (
                     f"RKNN landmarks | detector={detector_name} | crop={crop_mode} | "
-                    f"FPS={fps:.1f} | infer={infer_ms:.1f} ms"
+                    f"pts={args.landmark_count} | "
+                    f"lm={'valid' if landmark_valid else 'invalid'} | "
+                    f"coord={coord_mode_used} | FPS={fps:.1f} | infer={infer_ms:.1f} ms"
                 ),
                 (20, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
