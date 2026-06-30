@@ -29,3 +29,14 @@ models/dms/*.jpg
 models/dms/*.png
 AXON RKNN Landmark Live Demo_screenshot*.png
 configs/dms/*backup*.yaml
+
+# EyeNet local training artifacts
+datasets/eye_state_live/
+datasets/eye_state_finetune/
+datasets/bad_images_quarantine/
+models/eyenetrknn/*.pt
+models/eyenetrknn/*.onnx
+models/eyenetrknn/*.onnx.data
+models/eyenetrknn/*.rknn
+models/eyenetrknn/rknn_calib_dataset.txt
+bad_images_list.txt

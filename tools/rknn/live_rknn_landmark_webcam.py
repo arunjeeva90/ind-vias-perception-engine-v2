@@ -10,6 +10,14 @@ import cv2
 import numpy as np
 from rknnlite.api import RKNNLite
 
+from ind_vias_dms.eyenetrknn.landmark_eye_crop import (
+    EYE_LEFT_IMG,
+    EYE_RIGHT_IMG,
+    crop_eye_from_landmarks,
+    draw_eye_box,
+)
+
+from ind_vias_dms.eyenetrknn.rknnlite_classifier import EyeNetRKNNLiteClassifier
 
 PERF_LOG_FIELDS = [
     "timestamp_ms",
@@ -35,6 +43,13 @@ PERF_LOG_FIELDS = [
     "pitch_proxy",
     "left_eye_open_proxy",
     "right_eye_open_proxy",
+    "eyeA_score",
+    "eyeB_score",
+    "eyes_closed",
+    "eye_baseline_valid",
+    "eye_avg_score",
+    "eyes_closed_raw",
+    "eye_state",
 ]
 
 
@@ -60,6 +75,8 @@ def parse_args():
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fourcc", default="MJPG")
+    parser.add_argument("--overlay-scale", type=float, default=0.55)
+    parser.add_argument("--overlay-thickness", type=int, default=1)
     parser.add_argument("--input-size", nargs=2, type=int, default=[160, 160])
     parser.add_argument("--landmark-count", type=int, choices=[68, 106], default=68)
     parser.add_argument("--draw-landmark-indices", action="store_true")
@@ -72,11 +89,42 @@ def parse_args():
     parser.add_argument("--save-snapshot", default="outputs/rknn_live_snapshot.jpg")
     parser.add_argument("--perf-log", nargs="?", const="outputs/rknn_live_perf.csv", default=None)
     parser.add_argument("--show-dms-signals", action="store_true")
+    parser.add_argument("--eye-closed-score-threshold", type=float, default=0.65)
+    parser.add_argument("--eye-closed-avg-threshold", type=float, default=0.78)
+    parser.add_argument("--eye-state-debounce-frames", type=int, default=3)
     parser.add_argument(
         "--eye-calib-log",
         nargs="?",
         const="outputs/rknn_eye_calib_landmarks.csv",
         default=None,
+    )
+    parser.add_argument(
+        "--eyenetrknn-model",
+        default="models/eyenetrknn/eyenetrknn_mnv3s_96_int8.rknn",
+    )
+    parser.add_argument("--show-eye-state", action="store_true")
+    parser.add_argument(
+        "--save-eye-crops-root",
+        default="datasets/eye_state_live/train",
+        help="Folder where live EyeNet crops are saved.",
+    )
+    parser.add_argument(
+        "--crop-save-every",
+        type=int,
+        default=3,
+        help="Save one left/right eye crop pair every N frames during active collection.",
+    )
+    parser.add_argument(
+        "--eye-crop-side",
+        type=float,
+        default=42.0,
+        help="Fixed eye crop side length in pixels before resizing to 96x96. Smaller = more zoom.",
+    )
+    parser.add_argument(
+        "--eye-crop-smooth-alpha",
+        type=float,
+        default=0.65,
+        help="EMA smoothing alpha for eye crop center. Higher = follows current frame more.",
     )
     return parser.parse_args()
 
@@ -412,6 +460,285 @@ def write_eye_calib_sample(writer, timestamp_ms, label, frame_id, points):
     writer.writerow(row)
 
 
+def fit_overlay_text(text, max_width, font, scale, thickness):
+    if cv2.getTextSize(text, font, scale, thickness)[0][0] <= max_width:
+        return text
+
+    ellipsis = "..."
+    while text:
+        candidate = text[:-1] + ellipsis
+        if cv2.getTextSize(candidate, font, scale, thickness)[0][0] <= max_width:
+            return candidate
+        text = text[:-1]
+    return ellipsis
+
+
+def draw_overlay_dashboard(frame, lines, scale, thickness):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    h, w = frame.shape[:2]
+    x = 10
+    y = 24
+    pad_x = 8
+    pad_y = 7
+    line_gap = 7
+    max_text_width = max(40, w - (x + pad_x) * 2)
+    thickness = max(1, int(thickness))
+    scale = max(0.35, float(scale))
+
+    fitted_lines = [
+        fit_overlay_text(line, max_text_width, font, scale, thickness) for line in lines
+    ]
+    sizes = [cv2.getTextSize(line, font, scale, thickness)[0] for line in fitted_lines]
+    line_height = max((size[1] for size in sizes), default=12)
+    panel_width = min(
+        w - x * 2,
+        max((size[0] for size in sizes), default=0) + pad_x * 2,
+    )
+    panel_height = pad_y * 2 + len(fitted_lines) * line_height + (
+        max(0, len(fitted_lines) - 1) * line_gap
+    )
+
+    overlay = frame.copy()
+    panel_top = max(0, y - line_height - pad_y)
+    panel_bottom = min(h - 1, panel_top + panel_height)
+    cv2.rectangle(
+        overlay,
+        (x, panel_top),
+        (x + panel_width, panel_bottom),
+        (0, 0, 0),
+        -1,
+    )
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+
+    text_y = y
+    for line in fitted_lines:
+        cv2.putText(
+            frame,
+            line,
+            (x + pad_x, text_y),
+            font,
+            scale,
+            (0, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+        text_y += line_height + line_gap
+
+
+
+def save_current_eye_crops(
+    root_dir,
+    label,
+    frame_id,
+    left_eye_crop,
+    right_eye_crop,
+):
+    out_dir = Path(root_dir) / label
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = 0
+    ts = int(round(time.time() * 1000.0))
+
+    if left_eye_crop is not None and left_eye_crop.size > 0:
+        out_path = out_dir / f"{label}_frame_{frame_id:06d}_{ts}_L.png"
+        cv2.imwrite(str(out_path), left_eye_crop)
+        saved += 1
+
+    if right_eye_crop is not None and right_eye_crop.size > 0:
+        out_path = out_dir / f"{label}_frame_{frame_id:06d}_{ts}_R.png"
+        cv2.imwrite(str(out_path), right_eye_crop)
+        saved += 1
+
+    return saved
+
+
+
+def fuse_eyenetrknn_states(left_state, left_conf, right_state, right_conf):
+    """
+    Simple EyeNet fusion.
+
+    Priority:
+    - If both eyes are useful and disagree, return one_eye_closed.
+    - If one useful eye exists, trust that eye.
+    - If both are bad/unavailable, return highest-confidence raw state.
+    """
+
+    left_conf = float(left_conf or 0.0)
+    right_conf = float(right_conf or 0.0)
+
+    left_valid = left_state in ("eye_open", "eye_closed") and left_conf >= 0.60
+    right_valid = right_state in ("eye_open", "eye_closed") and right_conf >= 0.60
+
+    # Both eyes useful.
+    if left_valid and right_valid:
+        if left_state == "eye_closed" and right_state == "eye_closed":
+            return "eye_closed", max(left_conf, right_conf)
+
+        if left_state == "eye_open" and right_state == "eye_open":
+            return "eye_open", max(left_conf, right_conf)
+
+        return "one_eye_closed", max(left_conf, right_conf)
+
+    # Only one eye useful.
+    if left_valid:
+        return left_state, left_conf
+
+    if right_valid:
+        return right_state, right_conf
+
+    # No useful eye state.
+    candidates = []
+    if left_state is not None:
+        candidates.append(("L", left_state, left_conf))
+    if right_state is not None:
+        candidates.append(("R", right_state, right_conf))
+
+    if not candidates:
+        return "NO_EYE", 0.0
+
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    return candidates[0][1], candidates[0][2]
+
+
+def debounce_state(raw_state, stable_state, pending_state, pending_count, needed_frames=4):
+    """
+    Change stable state only after raw_state repeats for needed_frames.
+    This prevents EyeNet FINAL from flickering frame-by-frame.
+    """
+
+    if raw_state == stable_state:
+        return stable_state, None, 0
+
+    if raw_state == pending_state:
+        pending_count += 1
+    else:
+        pending_state = raw_state
+        pending_count = 1
+
+    if pending_count >= needed_frames:
+        stable_state = raw_state
+        pending_state = None
+        pending_count = 0
+
+    return stable_state, pending_state, pending_count
+
+
+
+def update_dms_eye_event_state(
+    raw_final_state,
+    dms_state,
+    closed_count,
+    open_count,
+    bad_count,
+    closed_confirm_frames=6,
+    open_confirm_frames=3,
+    bad_confirm_frames=12,
+):
+    """
+    DMS-level eye event state.
+
+    Important:
+    - one_eye_closed is NOT drowsiness.
+    - Full eye_closed requires both eyes closed through fused FINAL state.
+    - bad_crop is tolerated briefly before declaring unreliable.
+    """
+
+    if raw_final_state == "eye_closed":
+        closed_count += 1
+        open_count = 0
+        bad_count = 0
+
+        if closed_count >= closed_confirm_frames:
+            dms_state = "eye_closed"
+
+    elif raw_final_state in ("eye_open", "one_eye_closed"):
+        open_count += 1
+        closed_count = 0
+        bad_count = 0
+
+        if open_count >= open_confirm_frames:
+            if raw_final_state == "one_eye_closed":
+                dms_state = "one_eye_closed"
+            else:
+                dms_state = "eye_open"
+
+    elif raw_final_state in ("bad_crop", "NO_EYE"):
+        bad_count += 1
+        closed_count = 0
+        open_count = 0
+
+        if bad_count >= bad_confirm_frames:
+            dms_state = "unreliable"
+
+    else:
+        # Unknown state: keep previous DMS state.
+        pass
+
+    return dms_state, closed_count, open_count, bad_count
+
+
+
+def recrop_eye_with_smoothed_center(
+    frame,
+    box,
+    prev_center,
+    side=42.0,
+    alpha=0.65,
+):
+    """
+    Stabilize eye crop by smoothing crop center over time.
+
+    This reduces per-frame landmark jitter:
+    current landmark box center -> EMA smoothed center -> fixed-size crop
+
+    side:
+        smaller side = more internal digital zoom
+        larger side  = more context but less eye detail
+    """
+
+    if box is None:
+        return None, None, prev_center
+
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = box
+
+    cx = 0.5 * (float(x1) + float(x2))
+    cy = 0.5 * (float(y1) + float(y2))
+
+    alpha = float(alpha)
+    alpha = max(0.05, min(0.95, alpha))
+
+    if prev_center is None:
+        sx, sy = cx, cy
+    else:
+        px, py = prev_center
+        sx = alpha * cx + (1.0 - alpha) * px
+        sy = alpha * cy + (1.0 - alpha) * py
+
+    side = float(side)
+    side = max(28.0, min(72.0, side))
+
+    nx1 = int(round(sx - side / 2.0))
+    ny1 = int(round(sy - side / 2.0))
+    nx2 = int(round(sx + side / 2.0))
+    ny2 = int(round(sy + side / 2.0))
+
+    nx1 = max(0, min(w - 1, nx1))
+    ny1 = max(0, min(h - 1, ny1))
+    nx2 = max(0, min(w, nx2))
+    ny2 = max(0, min(h, ny2))
+
+    if nx2 <= nx1 or ny2 <= ny1:
+        return None, None, (sx, sy)
+
+    crop = frame[ny1:ny2, nx1:nx2]
+
+    if crop.size == 0:
+        return None, None, (sx, sy)
+
+    return crop, (nx1, ny1, nx2, ny2), (sx, sy)
+
+
 def main():
     args = parse_args()
 
@@ -509,6 +836,30 @@ def main():
     infer_ms = 0.0
     last_driver_bbox = None
     last_driver_bbox_t = 0.0
+    eyeA_baseline = None
+    eyeB_baseline = None
+    eye_state = "OPEN"
+    raw_closed_count = 0
+    raw_open_count = 0
+    eye_state_debounce_frames = max(1, args.eye_state_debounce_frames)
+    active_crop_label = None
+    last_crop_save_frame = -999999
+    eyenetrknn_stable_state = "NO_EYE"
+    eyenetrknn_pending_state = None
+    eyenetrknn_pending_count = 0
+    eyenetrknn_stable_conf = 0.0
+    dms_eye_state = "unknown"
+    dms_eye_closed_count = 0
+    dms_eye_open_count = 0
+    dms_eye_bad_count = 0
+    eye_clf = None
+    if args.show_eye_state:
+        eye_clf = EyeNetRKNNLiteClassifier(
+            model_path=args.eyenetrknn_model,
+            img_size=96,
+            input_color="bgr",
+        )
+        print(f"[INFO] EyeNet RKNN enabled: {args.eyenetrknn_model}")
 
     try:
         while True:
@@ -530,6 +881,21 @@ def main():
             detected_face_count = 0
             dms_signals = None
             latest_valid_points = None
+            eyeA_score = None
+            eyeB_score = None
+            eyes_closed = None
+            eye_avg_score = None
+            eyes_closed_raw = None
+            left_eye_crop = None
+            right_eye_crop = None
+            left_eye_state = None
+            right_eye_state = None
+            left_eye_conf = 0.0
+            right_eye_conf = 0.0
+            left_eye_box = None
+            right_eye_box = None
+            eyenet_left_text = "--"
+            eyenet_right_text = "--"
 
             display = frame.copy()
             h, w = frame.shape[:2]
@@ -609,11 +975,10 @@ def main():
                             landmark_valid = True
                             points = decoded_landmarks.reshape(args.landmark_count, 2)
                             latest_valid_points = points.copy()
-                            if args.show_dms_signals:
-                                dms_signals = compute_dms_signal_proxies(
-                                    points,
-                                    args.landmark_count,
-                                )
+                            dms_signals = compute_dms_signal_proxies(
+                                points,
+                                args.landmark_count,
+                            )
 
                             crop_w = x2 - x1
                             crop_h = y2 - y1
@@ -639,6 +1004,46 @@ def main():
                                         (255, 255, 255),
                                         1,
                                         cv2.LINE_AA,
+                                    )
+
+                            if args.show_eye_state and eye_clf is not None:
+                                pixel_points = np.empty_like(points, dtype=np.float32)
+                                pixel_points[:, 0] = x1 + points[:, 0] * crop_w
+                                pixel_points[:, 1] = y1 + points[:, 1] * crop_h
+
+                                left_eye_crop, left_eye_box = crop_eye_from_landmarks(
+                                    frame,
+                                    pixel_points,
+                                    EYE_LEFT_IMG,
+                                )
+                                right_eye_crop, right_eye_box = crop_eye_from_landmarks(
+                                    frame,
+                                    pixel_points,
+                                    EYE_RIGHT_IMG,
+                                )
+
+                                if left_eye_crop is not None and left_eye_box is not None:
+                                    l_cls, l_conf, _ = eye_clf.predict(left_eye_crop)
+                                    left_eye_state = l_cls
+                                    left_eye_conf = float(l_conf)
+                                    eyenet_left_text = f"{l_cls}:{l_conf:.2f}"
+                                    draw_eye_box(
+                                        display,
+                                        left_eye_box,
+                                        f"L {l_cls} {l_conf:.2f}",
+                                        color=(0, 255, 0),
+                                    )
+
+                                if right_eye_crop is not None and right_eye_box is not None:
+                                    r_cls, r_conf, _ = eye_clf.predict(right_eye_crop)
+                                    right_eye_state = r_cls
+                                    right_eye_conf = float(r_conf)
+                                    eyenet_right_text = f"{r_cls}:{r_conf:.2f}"
+                                    draw_eye_box(
+                                        display,
+                                        right_eye_box,
+                                        f"R {r_cls} {r_conf:.2f}",
+                                        color=(0, 200, 255),
                                     )
                         else:
                             cv2.putText(
@@ -684,39 +1089,127 @@ def main():
                 frame_count = 0
                 fps_t0 = now
 
-            cv2.putText(
-                display,
-                (
-                    f"RKNN landmarks | detector={detector_name} | roi={roi_mode} | "
-                    f"track={crop_mode} | "
-                    f"pts={args.landmark_count} | "
-                    f"lm={'valid' if landmark_valid else 'invalid'} | "
-                    f"coord={coord_mode_used} | FPS={fps:.1f} | infer={infer_ms:.1f} ms"
-                ),
-                (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (0, 255, 255),
-                2,
-                cv2.LINE_AA,
-            )
+            if dms_signals is not None:
+                eyeA = dms_signals["left_eye_open_proxy"]
+                eyeB = dms_signals["right_eye_open_proxy"]
+                baseline_valid = (
+                    eyeA_baseline is not None
+                    and eyeB_baseline is not None
+                    and eyeA_baseline > 0.0
+                    and eyeB_baseline > 0.0
+                )
+                if baseline_valid:
+                    eyeA_score = eyeA / eyeA_baseline
+                    eyeB_score = eyeB / eyeB_baseline
+                    eye_avg_score = (eyeA_score + eyeB_score) * 0.5
+                    eyes_closed_raw = (
+                        (
+                            eyeA_score < args.eye_closed_score_threshold
+                            and eyeB_score < args.eye_closed_score_threshold
+                        )
+                        or eye_avg_score < args.eye_closed_avg_threshold
+                    )
+                    if eyes_closed_raw:
+                        raw_closed_count += 1
+                        raw_open_count = 0
+                        if raw_closed_count >= eye_state_debounce_frames:
+                            eye_state = "CLOSED"
+                    else:
+                        raw_open_count += 1
+                        raw_closed_count = 0
+                        if raw_open_count >= eye_state_debounce_frames:
+                            eye_state = "OPEN"
+                    eyes_closed = eye_state == "CLOSED"
 
             if args.show_dms_signals and dms_signals is not None:
-                cv2.putText(
-                    display,
-                    (
-                        f"yawP={dms_signals['yaw_proxy']:.2f} "
-                        f"pitchP={dms_signals['pitch_proxy']:.2f} "
-                        f"eyeA={dms_signals['left_eye_open_proxy']:.2f} "
-                        f"eyeB={dms_signals['right_eye_open_proxy']:.2f}"
-                    ),
-                    (20, 58),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                    cv2.LINE_AA,
+                yaw_text = f"{dms_signals['yaw_proxy']:.2f}"
+                pitch_text = f"{dms_signals['pitch_proxy']:.2f}"
+                eyeA_text = f"{eyeA:.2f}"
+                eyeB_text = f"{eyeB:.2f}"
+                if eyeA_score is not None and eyeB_score is not None:
+                    eyeA_score_text = f"{eyeA_score:.2f}"
+                    eyeB_score_text = f"{eyeB_score:.2f}"
+                    eye_avg_score_text = f"{eye_avg_score:.2f}"
+                    eyes_state = eye_state
+                else:
+                    eyes_state = "NO_BASE"
+                    eyeA_score_text = "--"
+                    eyeB_score_text = "--"
+                    eye_avg_score_text = "--"
+            else:
+                yaw_text = "--"
+                pitch_text = "--"
+                eyeA_text = "--"
+                eyeB_text = "--"
+                eyeA_score_text = "--"
+                eyeB_score_text = "--"
+                eye_avg_score_text = "--"
+                eyes_state = "NO_BASE"
+
+            overlay_lines = [
+                f"RKNN | det={detector_name} | roi={roi_mode} | track={crop_mode}",
+                (
+                    f"pts={args.landmark_count} | "
+                    f"lm={'valid' if landmark_valid else 'invalid'} | "
+                    f"yawP={yaw_text} | pitchP={pitch_text}"
+                ),
+                (
+                    f"eyeA={eyeA_text} eyeB={eyeB_text} | "
+                    f"sA={eyeA_score_text} sB={eyeB_score_text}"
+                ),
+                (
+                    f"avg={eye_avg_score_text} | "
+                    f"thr={args.eye_closed_score_threshold:.2f}/{args.eye_closed_avg_threshold:.2f} | "
+                    f"eyes={eyes_state}"
+                ),
+            ]
+            if args.show_eye_state:
+                overlay_lines.append(f"EyeNet L={eyenet_left_text} | R={eyenet_right_text}")
+                raw_eye_state, raw_eye_conf = fuse_eyenetrknn_states(
+                    left_eye_state,
+                    left_eye_conf,
+                    right_eye_state,
+                    right_eye_conf,
                 )
+
+                eyenetrknn_stable_state, eyenetrknn_pending_state, eyenetrknn_pending_count = debounce_state(
+                    raw_eye_state,
+                    eyenetrknn_stable_state,
+                    eyenetrknn_pending_state,
+                    eyenetrknn_pending_count,
+                    needed_frames=6,
+                )
+
+                eyenetrknn_stable_conf = raw_eye_conf
+
+                overlay_lines.append(
+                    f"EyeNet FINAL={eyenetrknn_stable_state}:{eyenetrknn_stable_conf:.2f} "
+                    f"raw={raw_eye_state}:{raw_eye_conf:.2f} "
+                    f"pend={eyenetrknn_pending_state}:{eyenetrknn_pending_count}"
+                )
+                dms_eye_state, dms_eye_closed_count, dms_eye_open_count, dms_eye_bad_count = update_dms_eye_event_state(
+                    eyenetrknn_stable_state,
+                    dms_eye_state,
+                    dms_eye_closed_count,
+                    dms_eye_open_count,
+                    dms_eye_bad_count,
+                    closed_confirm_frames=6,
+                    open_confirm_frames=3,
+                    bad_confirm_frames=12,
+                )
+
+                overlay_lines.append(
+                    f"DMS_EYE={dms_eye_state} "
+                    f"closed_cnt={dms_eye_closed_count} "
+                    f"open_cnt={dms_eye_open_count} "
+                    f"bad_cnt={dms_eye_bad_count}"
+                )
+            draw_overlay_dashboard(
+                display,
+                overlay_lines,
+                args.overlay_scale,
+                args.overlay_thickness,
+            )
 
             total_frame_ms = (time.time() - frame_t0) * 1000.0
 
@@ -767,10 +1260,46 @@ def main():
                             if dms_signals is not None
                             else ""
                         ),
+                        "eyeA_score": f"{eyeA_score:.6f}" if eyeA_score is not None else "",
+                        "eyeB_score": f"{eyeB_score:.6f}" if eyeB_score is not None else "",
+                        "eyes_closed": (
+                            int(eyes_closed) if eyes_closed is not None else ""
+                        ),
+                        "eye_baseline_valid": int(
+                            eyeA_baseline is not None
+                            and eyeB_baseline is not None
+                            and eyeA_baseline > 0.0
+                            and eyeB_baseline > 0.0
+                        ),
+                        "eye_avg_score": (
+                            f"{eye_avg_score:.6f}" if eye_avg_score is not None else ""
+                        ),
+                        "eyes_closed_raw": (
+                            int(eyes_closed_raw) if eyes_closed_raw is not None else ""
+                        ),
+                        "eye_state": eye_state if eye_avg_score is not None else "",
                     }
                 )
                 if frame_id % 30 == 0:
                     perf_handle.flush()
+
+            if active_crop_label is not None:
+                every_n = max(1, int(args.crop_save_every))
+                if frame_id - last_crop_save_frame >= every_n:
+                    saved = save_current_eye_crops(
+                        args.save_eye_crops_root,
+                        active_crop_label,
+                        frame_id,
+                        left_eye_crop,
+                        right_eye_crop,
+                    )
+                    last_crop_save_frame = frame_id
+
+                    if saved > 0 and frame_id % 30 == 0:
+                        print(
+                            f"[COLLECT] label={active_crop_label}, saved={saved}, "
+                            f"root={args.save_eye_crops_root}"
+                        )
 
             cv2.imshow("AXON RKNN Landmark Live Demo", display)
 
@@ -778,6 +1307,24 @@ def main():
             if key == ord("s"):
                 cv2.imwrite(str(save_path), display)
                 print(f"[OK] Saved snapshot: {save_path}")
+            elif key == ord("b"):
+                if dms_signals is None:
+                    print("[WARN] No valid eye proxy values to capture baseline")
+                else:
+                    eyeA = dms_signals["left_eye_open_proxy"]
+                    eyeB = dms_signals["right_eye_open_proxy"]
+                    if eyeA > 0.0 and eyeB > 0.0:
+                        eyeA_baseline = eyeA
+                        eyeB_baseline = eyeB
+                        print(
+                            f"[OK] Captured open-eye baseline: "
+                            f"eyeA={eyeA_baseline:.6f}, eyeB={eyeB_baseline:.6f}"
+                        )
+                    else:
+                        print(
+                            f"[WARN] Eye baseline not captured; "
+                            f"eyeA={eyeA:.6f}, eyeB={eyeB:.6f}"
+                        )
             elif key in (ord("o"), ord("c")):
                 label = "open" if key == ord("o") else "closed"
                 if eye_calib_writer is None:
@@ -797,12 +1344,41 @@ def main():
                         f"[OK] Saved eye calibration sample: "
                         f"label={label}, frame_id={frame_id}, points={args.landmark_count}"
                     )
+            elif key in (ord("1"), ord("2"), ord("3")):
+                label_map = {
+                    ord("1"): "eye_open",
+                    ord("2"): "eye_closed",
+                    ord("3"): "bad_crop",
+                }
+                active_crop_label = label_map[key]
+                last_crop_save_frame = -999999
+                print(f"[COLLECT] Started saving: {active_crop_label}")
+
+            elif key == ord("0"):
+                print(f"[COLLECT] Stopped saving. Previous label={active_crop_label}")
+                active_crop_label = None
+
+            elif key == ord(" "):
+                if active_crop_label is None:
+                    print("[COLLECT] No active label. Press 1=open, 2=closed, 3=bad_crop first.")
+                else:
+                    saved = save_current_eye_crops(
+                        args.save_eye_crops_root,
+                        active_crop_label,
+                        frame_id,
+                        left_eye_crop,
+                        right_eye_crop,
+                    )
+                    print(f"[COLLECT] Manual save: label={active_crop_label}, saved={saved}")
+
             elif key == ord("q"):
                 break
 
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        if eye_clf is not None:
+            eye_clf.release()
         rknn.release()
         if perf_handle is not None:
             perf_handle.flush()
