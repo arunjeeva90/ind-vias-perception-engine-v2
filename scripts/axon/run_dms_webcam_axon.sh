@@ -12,14 +12,16 @@
 #
 # Environment variables:
 #   HEADLESS=1    - run without display (no --display, no --status-window)
+#   FAST_LIVE=1   - disable video/log recording and use lightweight face-box tracking
+#   ENABLE_106_RKNN=1 - opt in to internal-PoC driver-only 106-point NPU evidence
 #
 # Examples:
 #   bash scripts/axon/run_dms_webcam_axon.sh 0
 #   bash scripts/axon/run_dms_webcam_axon.sh 1 outputs/axon_cam1
 #   HEADLESS=1 bash scripts/axon/run_dms_webcam_axon.sh 0 outputs/axon_headless_test
 #
-# Low-lag AXON mode:
-#   bash scripts/axon/run_dms_webcam_axon.sh 1 --camera-fps 20 --inference-fps 12 --width 640 --height 480 --fourcc MJPG --show-perf
+# Low-lag AXON mode (performance appears in the status consoles, not on video):
+#   FAST_LIVE=1 bash scripts/axon/run_dms_webcam_axon.sh 1 --camera-fps 20 --inference-fps 12 --width 640 --height 480 --fourcc MJPG
 
 set -e
 
@@ -62,33 +64,19 @@ fi
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-# Check for cabin ONNX model and class map
-CABIN_ONNX_ARGS=()
-MODEL_PATH="models/dms/cabin_objects.onnx"
-CLASS_MAP_PATH="configs/dms/cabin_object_class_map_coco_phone.json"
-
-if [ -f "$MODEL_PATH" ] && [ -f "$CLASS_MAP_PATH" ]; then
-    echo "[INFO] Cabin ONNX model found. Enabling ONNX cabin evidence."
-    CABIN_ONNX_ARGS=(--cabin-evidence-backend onnx --cabin-evidence-model "$MODEL_PATH" --cabin-evidence-class-map "$CLASS_MAP_PATH")
-else
-    echo "[WARN] Cabin ONNX model or class map not found."
-    echo "       Model:     $MODEL_PATH ($([ -f "$MODEL_PATH" ] && echo 'EXISTS' || echo 'MISSING'))"
-    echo "       Class map: $CLASS_MAP_PATH ($([ -f "$CLASS_MAP_PATH" ] && echo 'EXISTS' || echo 'MISSING'))"
-    echo "       Running with dummy cabin evidence backend."
-    echo ""
-    CABIN_ONNX_ARGS=(--cabin-evidence-backend dummy)
-fi
+# The retained COCO phone model uses the RKNN Model Zoo multi-output DFL
+# contract. The integrated cabin-evidence parser does not yet support that
+# contract, so this head/eye launcher must remain dummy instead of claiming a
+# working phone integration. Use the preserved standalone phone tools later.
+echo "[INFO] Phone detection disabled for this vehicle-test phase."
+echo "       Retained standalone baseline: old_baseline_coco_phone_detector"
+CABIN_ONNX_ARGS=(--cabin-evidence-backend dummy)
 
 # Build display arguments
 DISPLAY_ARGS=()
 if [ "${HEADLESS:-0}" != "1" ]; then
-    if [ "${FAST_LIVE:-0}" = "1" ]; then
-        DISPLAY_ARGS=(--display)
-        echo "[INFO] FAST_LIVE display mode enabled (--display only, no status window)"
-    else
-        DISPLAY_ARGS=(--display --status-window)
-        echo "[INFO] Display mode enabled (--display --status-window)"
-    fi
+    DISPLAY_ARGS=(--display --status-window --window-layout vehicle-test)
+    echo "[INFO] DualSight three-window vehicle-test display enabled."
 else
     echo "[INFO] Headless mode (no display window)"
 fi
@@ -105,10 +93,19 @@ RUN_ARGS=(
     "${CABIN_ONNX_ARGS[@]}"
 )
 
+if [ "${ENABLE_106_RKNN:-0}" = "1" ]; then
+    echo "[WARN] ENABLE_106_RKNN=1: internal-PoC-only InsightFace weights."
+    echo "       Runtime will fail safe to MediaPipe/EAR if RKNNLite or /dev/rknpu is unavailable."
+    RUN_ARGS+=(--landmark-106-backend rknn)
+fi
+
 if [ "${FAST_LIVE:-0}" = "1" ]; then
-    echo "[INFO] FAST_LIVE=1 enabled: disabling output video and heavy logs."
+    echo "[INFO] FAST_LIVE=1 enabled: keeping all consoles, disabling video/heavy logs."
     RUN_ARGS+=(--axon-face-box-tracker)
 else
+    echo "[INFO] Recording full feedback bundle:"
+    echo "       overlay MP4, state/trace/performance JSONL, events JSON/CSV,"
+    echo "       learning memory, and session manifest JSON."
     RUN_ARGS+=(
         --output "$OUTPUT_DIR/webcam_output.mp4"
         --jsonl "$OUTPUT_DIR/webcam_state.jsonl"
@@ -116,6 +113,8 @@ else
         --event-log "$OUTPUT_DIR/webcam_events.csv"
         --event-json "$OUTPUT_DIR/webcam_events.json"
         --learning-memory "$OUTPUT_DIR/webcam_learning.jsonl"
+        --perf-jsonl "$OUTPUT_DIR/webcam_performance.jsonl"
+        --session-json "$OUTPUT_DIR/webcam_session.json"
     )
 fi
 

@@ -6,15 +6,13 @@ import cv2
 import numpy as np
 
 
+# InsightFace 2d106det has ten points for each eye.  Keep these aliases for the
+# live PoC, but do not mix the image-right eyebrow (97..105) into the eye.
 # Image-left eye in display, usually driver's right eye.
-EYE_LEFT_IMG = [
-    33, 34, 35, 36, 37, 38, 39, 40,
-]
+EYE_LEFT_IMG = list(range(33, 43))
 
 # Image-right eye in display, usually driver's left eye.
-EYE_RIGHT_IMG = [
-    87, 88, 89, 90, 94, 95, 96, 98, 99, 100,
-]
+EYE_RIGHT_IMG = list(range(87, 97))
 
 
 def _remove_outliers(pts: np.ndarray) -> np.ndarray:

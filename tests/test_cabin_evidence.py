@@ -647,6 +647,25 @@ def test_onnx_parser_handles_n_5_plus_c_output():
     assert evidence[0].object_type == CabinEvidenceObjectType.SEATBELT
 
 
+def test_onnx_parser_handles_one_class_yolov8_channel_first_output():
+    detector = _onnx_detector(
+        class_map_path="configs/dms/cabin_object_class_map_phone.json"
+    )
+    output = np.zeros((1, 5, 10), dtype=np.float32)
+    output[0, :, 0] = [320.0, 320.0, 128.0, 192.0, 0.90]
+
+    evidence = detector.parse_outputs(
+        output,
+        (100, 100, 3),
+        100,
+        {"driver_roi_norm": [0.0, 0.0, 1.0, 1.0]},
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].object_type == CabinEvidenceObjectType.PHONE
+    assert detector.last_parser_format == "YOLOV8_CXCYWH_CLASS_SCORES"
+
+
 def test_onnx_parser_unknown_shape_is_safe():
     detector = _onnx_detector()
 
@@ -1533,4 +1552,3 @@ def test_phone_state_serializes_simplified_debug_fields():
     assert payload["phone_scenario"] == "PHONE_DISTRACTION"
     assert payload["phone_overlay_drawn"] is True
     assert payload["status_page_index"] == 1
-

@@ -351,6 +351,53 @@ overlay_enabled: true
 telemetry_panel_enabled: true
 status_window_enabled: false
 overlay_panel_embedded: true
+# Optional reviewed-data classifiers. They are fail-safe and remain disabled
+# until locally trained, evaluated, and explicitly enabled.
+eye_state_classifier:
+  enabled: false
+  model_path: models/dms_classifiers/eye_state/model.onnx
+  metadata_path: models/dms_classifiers/eye_state/model.metadata.json
+  class_names:
+    - eye_closed
+    - eye_open
+  input_size: 96
+  min_confidence: 0.70
+  # Must match the authoritative reviewed handoff crop generator.
+  crop_mode: aligned_reviewed_v1
+  crop_context_scale: 1.65
+  crop_eyebrow_shift: 0.10
+  crop_min_eye_width: 18.0
+  crop_min_blur: 12.0
+  crop_min_brightness: 18.0
+  crop_max_brightness: 235.0
+  crop_max_padding_fraction: 0.25
+  geometry_agreement_enabled: true
+  geometry_open_margin: 1.25
+  # Internal PoC only: InsightFace pretrained weights are not cleared for OEM
+  # deployment. When enabled, this validates eye geometry; it does not classify.
+  landmark_106_enabled: false
+  landmark_106_model_path: models/dms/landmark_106.onnx
+  landmark_106_require_agreement: true
+  landmark_106_max_normalized_error: 0.35
+  crop_padding_x: 0.45
+  crop_padding_y: 1.10
+  allow_missing_model: true
+
+seatbelt_detection:
+  enabled: false
+  model_path: models/dms_classifiers/seat_belt/model.onnx
+  metadata_path: models/dms_classifiers/seat_belt/model.metadata.json
+  class_names:
+    - no_seat_belt
+    - seat_belt_on
+  input_size: 224
+  min_confidence: 0.72
+  min_blur: 24.0
+  min_brightness: 25.0
+  max_brightness: 235.0
+  confirm_ms: 1200
+  allow_missing_model: true
+
 phone_object_detection:
   enabled: true
   backend: onnx_yolo_optional
@@ -530,6 +577,3 @@ attention_state:
   prefer_distraction_when_eyes_open: true
   suppress_drowsiness_when_phone_likely: true
   degrade_on_sustained_ambiguous_attention_loss: true
-
-
-

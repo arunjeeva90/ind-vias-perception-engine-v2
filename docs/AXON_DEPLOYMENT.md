@@ -5,15 +5,17 @@
 This document provides step-by-step instructions to deploy and run the
 DualSight DMS v0.2.9 on the Vicharak AXON board running Ubuntu 22.04 ARM64.
 
-This is a **Stage 1 CPU/OpenCV runtime deployment** only. The goal is to get
-the existing stable DMS running on AXON hardware with a USB webcam or video
-file input using CPU-based inference.
+The integrated DMS currently uses the stable MediaPipe/OpenCV CPU path. RKNN
+artefacts are used only by model-specific tools that have their own validation
+evidence; conversion alone is not treated as permission to replace a runtime
+backend.
 
 ## 2. Target Board and OS
 
 - **Board:** Vicharak AXON
 - **OS:** Ubuntu 22.04 (ARM64/aarch64)
-- **Runtime:** CPU/OpenCV (no GPU/NPU acceleration in this stage)
+- **Integrated runtime:** MediaPipe/OpenCV CPU
+- **Available NPU tools:** qualified model-specific RKNN demos/converters
 - **Camera:** USB webcam via /dev/video* or video file input
 
 > If you are running a different Ubuntu version, some package names may need
@@ -27,9 +29,9 @@ feature/axon-runtime-v029
 
 Based on commit: `6576c94 Stabilize DualSight DMS v0.2.9 simplified cabin phone logic`
 
-## 4. What This Branch Changes
+## 4. Original AXON Baseline Changes
 
-This branch **adds new files only** for AXON deployment:
+The original AXON deployment baseline added:
 
 - `requirements/requirements-axon-cpu.txt` - ARM64 CPU runtime Python packages
 - `scripts/axon/setup_axon_ubuntu.sh` - Ubuntu 22.04 environment setup
@@ -42,17 +44,17 @@ This branch **adds new files only** for AXON deployment:
 - `docs/AXON_DEPLOYMENT.md` - This deployment guide
 - `docs/AXON_RUNTIME_CHECKLIST.md` - Quick runtime checklist
 
-## 5. What This Branch Does NOT Change
+## 5. Original Baseline Exclusions
 
-- No modifications to `src/ind_vias_perception/` (forward ADAS)
-- No modifications to `src/ind_vias_dms/` (DMS core logic)
-- No modifications to `apps/run_dms_demo.py`
-- No modifications to existing configs or tests
-- No changes to DMS FSM behavior
-- No changes to phone ROI/gating logic
-- No changes to phone scenario logic
-- No seatbelt heuristic logic
-- No RKNN/NPU acceleration implementation
+The original deployment baseline did not modify DMS core logic, FSM behavior,
+phone ROI/gating, or seat-belt inference.
+
+The reviewed 2026-07-30 handoff integration adds disabled-by-default ONNX eye
+and seat-belt classifier hooks, deterministic training tooling, and a
+one-class phone map. It preserves the existing FSM, phone evidence fusion, and
+EAR fallback. These optional classifiers must remain disabled until their
+held-out metrics and AXON runtime checks pass. See
+`reports/handoff_integration/20260730_analysis_and_build.md`.
 
 ## 6. Clone Repo on AXON
 
@@ -137,9 +139,88 @@ bash scripts/axon/run_dms_webcam_axon.sh 0
 This runs the DMS with:
 - Camera index 0
 - Debug overlay enabled
-- Display window and status window visible
-- Cabin ONNX evidence (if model file exists)
+- Screenshot-style DualSight video, status, and vehicle-monitor windows
+- A separate HMI header above the video; no status/performance panel obscures
+  camera pixels
+- Direct FaceMesh, head-pose axes, road/gaze vector, EAR eye state, PERCLOS,
+  and vehicle gate
+- Largest validated face inside the driver ROI selected as `DRIVER`; every
+  other face shown as `PASSENGER` with a box only
+- Phone/seat-belt model inference disabled for this test phase
 - All output files written to `outputs/axon_webcam_live/`
+
+The normal launcher records a feedback bundle until `q` is pressed:
+
+- `webcam_output.mp4`: camera video with the complete DMS overlay;
+- `webcam_state.jsonl`: serialized DMS state for every processed frame;
+- `webcam_trace.jsonl`: detailed decision/input trace;
+- `webcam_performance.jsonl`: capture, inference, latency, CPU/RAM, and backend
+  measurements;
+- `webcam_events.json` and `webcam_events.csv`: event summaries;
+- `webcam_learning.jsonl`: learning-memory observations;
+- `webcam_session.json`: valid JSON manifest with commit, configuration,
+  output paths, final performance, frame count, and runtime error status.
+
+Pass a distinct second argument to preserve multiple runs, for example:
+
+```bash
+bash scripts/axon/run_dms_webcam_axon.sh 0 outputs/axon_feedback_run01
+```
+
+`FAST_LIVE=1` intentionally disables this recording bundle.
+
+The video window contains a dedicated instrument strip on the left of the
+camera image. Head-pose and gaze graphics are not drawn over the driver's face.
+The 3D axis convention is:
+
+- red `X`: lateral head axis;
+- green `Y`: vertical head axis;
+- blue `Z`: depth/forward head axis.
+
+Yaw, pitch, roll, and the current gaze zone are printed below the triad.
+
+For lowest live-test latency while retaining all three consoles:
+
+```bash
+FAST_LIVE=1 bash scripts/axon/run_dms_webcam_axon.sh 0
+```
+
+The retained `old_baseline_coco_phone_detector` is never enabled implicitly.
+Its ONNX/RKNN files use the RKNN Model Zoo multi-output DFL contract and remain
+available through the preserved standalone phone tools. The integrated
+cabin-evidence parser does not select that contract in this phase.
+
+The integrated vehicle-test runtime currently prints and displays:
+
+- compute backend: `CPU / MediaPipe XNNPACK`;
+- NPU: `NOT ACTIVE`;
+- NPU TOPS: `0.00 (inactive)`;
+- capture-to-feature latency, model latency, FPS, CPU, and RAM.
+
+`NPU TOPS` is not inferred from nominal model GOPS. It can report non-zero
+utilization only after a selected RKNN runtime exposes a real measurement.
+
+### Optional internal 106-point NPU evidence
+
+The local InsightFace `2d106det` ONNX/RKNN weights are internal-PoC-only unless
+separately licensed. They are disabled by default. To request driver-only RKNN
+geometry evidence:
+
+```bash
+ENABLE_106_RKNN=1 FAST_LIVE=1 \
+  bash scripts/axon/run_dms_webcam_axon.sh 0
+```
+
+The backend uses only the selected driver's face crop. Agreement with
+MediaPipe eye geometry can raise the observation confidence; disagreement is
+advisory and cannot override the accepted EAR path. If RKNNLite, the converted
+model, or the `/dev/rknpu*` kernel device is unavailable, the runtime reports
+the specific failure and continues with MediaPipe/EAR.
+
+RKNNLite does not expose a live TOPS utilization counter in this integration.
+When NPU inference is active, the console reports `NPU ACTIVE`, the measured
+106-point inference latency, and `NPU TOPS: UNAVAILABLE` rather than inventing
+a utilization value.
 
 To use a different camera:
 ```bash
@@ -190,6 +271,7 @@ When running with `--display`:
 |-----|--------|
 | `q` | Quit |
 | `c` | Calibrate road/head reference |
+| `r` | Reset road/head calibration |
 | `=` | Increase speed by 1 km/h |
 | `+` | Increase speed by 5 km/h |
 | `-` | Decrease speed |
@@ -232,16 +314,23 @@ sudo apt install libgl1 libglib2.0-0
 - If unavailable via pip, try building from source
 - Or use pre-built ARM64 wheel from ONNX Runtime releases
 
-### ONNX model missing
-- Place cabin object detection model at: `models/dms/cabin_objects.onnx`
-- Place class map at: `configs/dms/cabin_object_class_map_coco_phone.json`
-- Without the model, the system runs with dummy cabin evidence backend
+### Optional retained phone baseline
+- ONNX: `models/mobile_phone_detector/yolov8n.onnx`
+- RKNN: `models/mobile_phone_detector/yolov8n.rknn`
+- Class map: `configs/dms/cabin_object_class_map_coco_phone.json`
+- The ONNX and RKNN files are preserved for the standalone Model Zoo phone
+  tools.
+- A direct integrated smoke check currently reports
+  `UNSUPPORTED_OUTPUT_SHAPE` because the cabin parser expects a different YOLO
+  output layout. It therefore remains disabled instead of being misrepresented
+  as integrated.
 
 ### Low FPS on CPU
 - Reduce `frame_resize_width` in config (try 480 or 320)
 - Use headless mode for better performance
 - Close other applications
-- RKNN/NPU acceleration will be added in a future branch
+- Use `FAST_LIVE=1` to disable video/log recording while retaining the consoles.
+- Do not substitute an RKNN model without task gates and ONNX/RKNN parity.
 
 ### Status window not visible in SSH
 - Status window requires a display
@@ -252,11 +341,15 @@ sudo apt install libgl1 libglib2.0-0
 
 - CPU mode on AXON will be slower than desktop x86 machines
 - Expected FPS range: 5-15 FPS depending on resolution and face count
-- The AXON config uses `frame_resize_width: 640` (reduced from 960)
+- The AXON config uses `frame_resize_width: 480` (reduced from 960)
+- The mounted-driver profile uses direct FaceMesh; the wider-cabin
+  proposal-plus-crop path remains available but is slower on AXON.
+- MediaPipe Hands is disabled with the deferred phone phase.
 - Further reduce to 480 or 320 if FPS is too low
 - Use headless mode (`HEADLESS=1`) for slightly better performance
 - Avoid running with `--display` over SSH (adds latency)
-- RKNN/NPU acceleration will be a separate future branch for hardware speedup
+- Existing phone and landmark RKNN artefacts remain separate from the integrated
+  runtime until their backend, licensing, accuracy, and parity gates are met.
 
 ## 20. Safety Notes
 
@@ -271,8 +364,10 @@ sudo apt install libgl1 libglib2.0-0
 
 The following items are planned for future branches (not part of this deployment):
 
-- **RKNN model conversion** - Convert ONNX models to RKNN format for NPU
-- **NPU inference backend** - Hardware-accelerated inference on AXON NPU
+- **Integrated RKNN face/landmark backend** - replace MediaPipe only after
+  accuracy, licensing, ONNX/RKNN parity, and live latency validation
+- **Accepted RKNN eye classifier** - only after the closed-eye and balanced
+  accuracy gates are met; current trial models remain disabled
 - **systemd service** - Auto-start DMS on boot
 - **Camera calibration** - Intrinsic/extrinsic calibration for AXON camera setup
 - **Thermal/FPS profiling** - Long-running thermal and performance analysis

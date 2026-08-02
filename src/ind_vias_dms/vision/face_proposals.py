@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from ind_vias_dms.core.config import DMSConfig
+from ind_vias_dms.utils.mediapipe_loader import load_mediapipe_solutions
 
 
 @dataclass
@@ -30,7 +31,7 @@ class FaceProposalDetector:
         self._haar: cv2.CascadeClassifier | None = None
         if config.face_proposal_backend == "mediapipe_face_detection":
             try:
-                import mediapipe as mp  # type: ignore
+                mp = load_mediapipe_solutions()
 
                 self._detector = mp.solutions.face_detection.FaceDetection(
                     model_selection=config.face_proposal_model_selection,

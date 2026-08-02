@@ -75,7 +75,7 @@ class DMSPipeline:
             config.head_pose_outlier_threshold_deg,
             config.head_pose_min_confidence,
         )
-        self.eye_state_estimator = EyeStateEstimator(config.eye_closed_threshold)
+        self.eye_state_estimator = EyeStateEstimator(config)
         self.eye_temporal = EyeTemporalTracker(config)
         self.gaze_estimator = GazeEstimator(config)
         self.road_axis = RoadAxisHeadPoseReference(config)
@@ -89,7 +89,7 @@ class DMSPipeline:
         self.phone_detector = MobileDistractionEstimator(config)
         self.cabin_object_detector = CabinObjectDetector(config)
         self.cabin_evidence_fusion = CabinEvidenceFusion(config)
-        self.seatbelt_detector = SeatbeltDetectionPlaceholder()
+        self.seatbelt_detector = SeatbeltDetectionPlaceholder(config)
         self.fps_meter = FPSMeter()
         self.no_face_since_ms: int | None = None
         self.eyes_off_road_since_ms: int | None = None
@@ -151,7 +151,11 @@ class DMSPipeline:
             self._reset_driver_temporal()
         raw_head_pose = self.head_pose_estimator.estimate(face.landmarks_px, frame.shape)
         head_pose = self.head_pose_smoother.update(raw_head_pose) if face.face_found else raw_head_pose
-        eye_state = self.eye_state_estimator.estimate(face.landmarks_px)
+        eye_state = self.eye_state_estimator.estimate(
+            face.landmarks_px,
+            frame,
+            face.bbox,
+        )
         pose_unreliable = face.face_found and self._pose_unreliable(head_pose)
         pose_held = False
         pose_hold_codes: list[str] = []
@@ -695,7 +699,11 @@ class DMSPipeline:
             attention=attention,
             dms_v02=v02,
             occupancy=occupancy,
-            seatbelt_authenticity=self.seatbelt_detector.process(frame),
+            seatbelt_authenticity=self.seatbelt_detector.process(
+                frame,
+                face.bbox if face.face_found else None,
+                timestamp_ms,
+            ),
             cabin_evidence=cabin_evidence,
             driver_readiness_score=readiness,
         )
@@ -720,6 +728,7 @@ class DMSPipeline:
 
     def close(self) -> None:
         self.face_backend.close()
+        self.eye_state_estimator.close()
         self.phone_detector.close()
 
     def calibrate_road_gaze(

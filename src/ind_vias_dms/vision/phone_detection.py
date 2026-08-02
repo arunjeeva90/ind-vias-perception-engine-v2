@@ -11,6 +11,7 @@ import numpy as np
 
 from ind_vias_dms.core.config import DMSConfig
 from ind_vias_dms.core.types import GazeZone, PlaceholderState
+from ind_vias_dms.utils.mediapipe_loader import load_mediapipe_solutions
 from ind_vias_dms.vision.face_landmarks import FaceLandmarkResult
 
 
@@ -66,7 +67,7 @@ class MobileDistractionEstimator:
         if not config.mobile_distraction_enabled:
             return
         try:
-            import mediapipe as mp  # type: ignore
+            mp = load_mediapipe_solutions()
         except ImportError:
             return
         self._hands = mp.solutions.hands.Hands(

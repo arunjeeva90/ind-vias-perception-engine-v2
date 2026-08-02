@@ -16,6 +16,11 @@ PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
 
+AXON_PYTHON="python3"
+if [ -x ".venv/bin/python" ]; then
+    AXON_PYTHON=".venv/bin/python"
+fi
+
 pass_msg() {
     echo "[PASS] $1"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -79,29 +84,30 @@ echo ""
 echo "--- Python Packages ---"
 
 # numpy
-if python3 -c "import numpy; print(f'numpy {numpy.__version__}')" 2>/dev/null; then
+if "$AXON_PYTHON" -c "import numpy; print(f'numpy {numpy.__version__}')" 2>/dev/null; then
     pass_msg "numpy importable"
 else
     fail_msg "numpy import failed"
 fi
 
 # cv2
-CV2_VER=$(python3 -c "import cv2; print(cv2.__version__)" 2>/dev/null)
+CV2_VER=$("$AXON_PYTHON" -c "import cv2; print(cv2.__version__)" 2>/dev/null)
 if [ -n "$CV2_VER" ]; then
     pass_msg "cv2 importable: version $CV2_VER"
 else
     fail_msg "cv2 (OpenCV) import failed"
 fi
 
-# mediapipe
-if python3 -c "import mediapipe; print(f'mediapipe {mediapipe.__version__}')" 2>/dev/null; then
-    pass_msg "mediapipe importable"
+# MediaPipe: use the same Solutions-only loader as the runtime so the package
+# does not block while importing unused Tasks audio support on AXON.
+if PYTHONPATH=src "$AXON_PYTHON" -c "from ind_vias_dms.utils.mediapipe_loader import load_mediapipe_solutions; mp = load_mediapipe_solutions(); print(f'mediapipe {mp.__version__}')" 2>/dev/null; then
+    pass_msg "mediapipe Solutions importable"
 else
-    warn_msg "mediapipe import failed (DMS face detection may not work)"
+    warn_msg "mediapipe Solutions import failed (DMS face detection may not work)"
 fi
 
 # onnxruntime
-if python3 -c "import onnxruntime; print(f'onnxruntime {onnxruntime.__version__}')" 2>/dev/null; then
+if "$AXON_PYTHON" -c "import onnxruntime; print(f'onnxruntime {onnxruntime.__version__}')" 2>/dev/null; then
     pass_msg "onnxruntime importable"
 else
     warn_msg "onnxruntime import failed (cabin ONNX evidence will not work)"
@@ -138,10 +144,10 @@ echo ""
 echo "--- Required Files ---"
 
 # Model file
-if [ -f "models/dms/cabin_objects.onnx" ]; then
-    pass_msg "models/dms/cabin_objects.onnx exists"
+if [ -f "models/mobile_phone_detector/yolov8n.onnx" ]; then
+    pass_msg "retained phone baseline ONNX exists (opt-in only)"
 else
-    warn_msg "models/dms/cabin_objects.onnx NOT found (cabin ONNX evidence will use dummy backend)"
+    warn_msg "retained phone baseline ONNX is missing (default DMS still uses dummy cabin backend)"
 fi
 
 # Class map

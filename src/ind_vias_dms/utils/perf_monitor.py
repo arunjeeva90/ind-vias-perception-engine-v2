@@ -16,8 +16,17 @@ except ImportError:  # pragma: no cover - depends on runtime image
 
 
 class RuntimePerfMonitor:
-    def __init__(self, *, model_gops_per_frame: float = 0.0, jsonl_path: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model_gops_per_frame: float = 0.0,
+        jsonl_path: str | None = None,
+        compute_backend: str = "CPU",
+        npu_active: bool = False,
+    ) -> None:
         self.model_gops_per_frame = max(0.0, float(model_gops_per_frame or 0.0))
+        self.compute_backend = str(compute_backend)
+        self.npu_active = bool(npu_active)
         self._process_times: deque[float] = deque(maxlen=120)
         self._inference_times: deque[float] = deque(maxlen=120)
         self._display_times: deque[float] = deque(maxlen=120)
@@ -74,11 +83,17 @@ class RuntimePerfMonitor:
             "inference_fps_actual": inference_fps_actual,
             "display_fps": self._rate(self._display_times),
             "frame_latency_ms": frame_latency_ms,
+            "feature_latency_ms": frame_latency_ms,
             "inference_time_ms": inference_time_ms,
             "overlay_time_ms": overlay_time_ms,
             "loop_time_ms": loop_time_ms,
             "cpu_percent": cpu_percent,
             "ram_mb": ram_mb,
+            "compute_backend": self.compute_backend,
+            "npu_active": self.npu_active,
+            # No RKNN performance-counter integration exists in this runtime.
+            # Never present the GOPS-derived workload estimate as NPU usage.
+            "npu_tops_utilized": None,
             "estimated_tops": estimated_tops,
             "captured_frames": captured_frames,
             "processed_frames": processed_frames,

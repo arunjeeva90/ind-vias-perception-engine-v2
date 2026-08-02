@@ -232,6 +232,9 @@ class DMSConfig:
     rear_row_face_max_area_norm: float = 0.012
     driver_min_front_layer_score: float = 0.55
     driver_min_candidate_score: float = 0.65
+    driver_largest_face_in_roi_priority: bool = False
+    retain_non_driver_faces_in_driver_roi: bool = False
+    retain_non_driver_landmarks: bool = True
     rear_overlap_driver_reject_threshold: float = 0.60
     prefer_previous_driver_track_ms: int = 1500
     allow_rear_face_inside_driver_roi: bool = True
@@ -346,6 +349,8 @@ class DMSConfig:
     runtime: dict[str, Any] | None = None
     performance: dict[str, Any] | None = None
     attention_state: dict[str, Any] | None = None
+    eye_state_classifier: dict[str, Any] | None = None
+    seatbelt_detection: dict[str, Any] | None = None
     phone_object_detection: dict[str, Any] | None = None
     cabin_evidence: dict[str, Any] | None = None
     head_down_uncertain_sustain_ms: int = 1200

@@ -1,0 +1,15 @@
+{
+  "model": "MobileNetV3-Small",
+  "task": "eye_state_classification",
+  "img_size": 96,
+  "class_to_idx": {
+    "bad_crop": 0,
+    "eye_closed": 1,
+    "eye_open": 2
+  },
+  "idx_to_class": {
+    "0": "bad_crop",
+    "1": "eye_closed",
+    "2": "eye_open"
+  }
+}

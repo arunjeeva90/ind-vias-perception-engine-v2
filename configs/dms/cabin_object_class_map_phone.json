@@ -1,0 +1,12 @@
+{
+  "version": "final-reviewed-phone-one-class-v1",
+  "classes": {
+    "0": "PHONE"
+  },
+  "aliases": {
+    "phone": "PHONE",
+    "cell phone": "PHONE",
+    "mobile": "PHONE",
+    "mobile phone": "PHONE"
+  }
+}

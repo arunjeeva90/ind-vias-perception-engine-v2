@@ -18,6 +18,10 @@ from ind_vias_dms.vision.head_pose import HeadPose
 from ind_vias_dms.visualization.colors import BLACK, GRAY, GREEN, RED, WHITE, status_color
 
 
+VIDEO_HEADER_HEIGHT = 46
+VIDEO_SIDEBAR_WIDTH = 190
+
+
 class OverlayRenderer:
     def __init__(
         self,
@@ -85,15 +89,18 @@ class OverlayRenderer:
             for idx, (x, y) in face.landmarks_px.items():
                 if idx % 8 == 0:
                     cv2.circle(out, (int(x), int(y)), 1, WHITE, -1)
-        if head_pose.confidence >= 0.3 and face.landmarks_px:
-            if draw_pose_axes:
-                self._draw_head_axis(out, face, head_pose, max_axis_length_px)
-            if draw_gaze_vector:
-                self._draw_gaze_hint(out, face, state, max_gaze_vector_length_px)
         if draw_panel:
             self._draw_panel(out, state, fps)
-        self._draw_banner(out, state)
-        return out
+        # Pose/gaze vectors are rendered in the dedicated instrument strip so
+        # they never obscure the driver's eyes or facial landmarks.
+        out = self._add_pose_instrument_strip(
+            out,
+            state,
+            head_pose,
+            draw_pose_axes=draw_pose_axes,
+            draw_gaze_vector=draw_gaze_vector,
+        )
+        return self._add_video_header(out, state)
 
     def render_status_dashboard(
         self,
@@ -109,21 +116,50 @@ class OverlayRenderer:
         camera_mount_position: str = "DASHBOARD_FRONT",
         camera_view_direction: str = "CABIN_REARWARD",
         driver_roi_state: str = "AUTO_LEFT",
+        eye_runtime_source: str = "LANDMARK_EAR",
+        eye_model_status: str = "DISABLED",
+        landmark_106_status: str = "DISABLED",
+        runtime_metrics: dict[str, object] | None = None,
+        compute_backend: str = "CPU",
+        npu_active: bool = False,
     ) -> np.ndarray:
         canvas = np.zeros((height, width, 3), dtype=np.uint8)
-        canvas[:] = (24, 24, 24)
-        cv2.rectangle(canvas, (0, 0), (width, 56), status_color(state.driver_availability.state), -1)
+        canvas[:] = (18, 21, 27)
+        ui_scale = min(width / 720.0, height / 1000.0)
+        ui_scale = max(1.0, ui_scale)
+        header_color = status_color(state.driver_availability.state)
+        cv2.rectangle(
+            canvas,
+            (0, 0),
+            (width, int(round(68 * ui_scale))),
+            header_color,
+            -1,
+        )
+        cv2.circle(
+            canvas,
+            (int(round(28 * ui_scale)), int(round(34 * ui_scale))),
+            int(round(12 * ui_scale)),
+            (20, 24, 30),
+            -1,
+        )
+        cv2.circle(
+            canvas,
+            (int(round(28 * ui_scale)), int(round(34 * ui_scale))),
+            int(round(6 * ui_scale)),
+            WHITE,
+            max(2, int(round(2 * ui_scale))),
+        )
         cv2.putText(
             canvas,
             "IND-VIAS DualSight DMS",
-            (20, 36),
+            (int(round(52 * ui_scale)), int(round(42 * ui_scale))),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
+            0.78 * ui_scale,
             BLACK,
-            2,
+            max(2, int(round(2 * ui_scale))),
+            cv2.LINE_AA,
         )
-        y = 70
-        for label, value in status_dashboard_lines(
+        rows = status_dashboard_lines(
             state,
             fps,
             road_yaw_offset_deg,
@@ -134,31 +170,208 @@ class OverlayRenderer:
             camera_mount_position,
             camera_view_direction,
             driver_roi_state,
-        ):
-            cv2.putText(canvas, label, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.40, GRAY, 1)
-            cv2.putText(canvas, value[:36], (164, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, WHITE, 1)
-            y += 20
+            eye_runtime_source,
+            eye_model_status,
+            landmark_106_status,
+            runtime_metrics,
+            compute_backend,
+            npu_active,
+        )
+        if width < 650 or height < 850:
+            _draw_compact_dashboard(canvas, _prioritize_status_dashboard_lines(rows), top=82)
+            return canvas
+
+        values = dict(rows)
+        metrics = dict(runtime_metrics or {})
+        feature_latency = _metric_text(
+            metrics.get("feature_latency_ms", metrics.get("frame_latency_ms")),
+            "ms",
+        )
+        inference_latency = _metric_text(metrics.get("inference_time_ms"), "ms")
+        capture_fps = _metric_text(metrics.get("capture_fps"), " FPS")
+        processing_fps = _metric_text(
+            metrics.get("processing_fps", fps),
+            " FPS",
+        )
+        inference_fps = _metric_text(metrics.get("inference_fps_actual"), " FPS")
+        cpu_ram = _cpu_ram_text(metrics)
+        npu_text = "ACTIVE" if npu_active else "NOT ACTIVE"
+        npu_tops = _npu_tops_text(metrics, npu_active)
+
+        margin = 14
+        gap = 12
+        logical_width = int(round(width / ui_scale))
+        column_width = (logical_width - margin * 2 - gap) // 2
+        left_x = margin
+        right_x = margin + column_width + gap
+
+        _draw_dashboard_card(
+            canvas,
+            "RUNTIME",
+            [
+                ("Processing", processing_fps),
+                ("Capture", capture_fps),
+                ("Inference", inference_fps),
+                ("Feature latency", feature_latency),
+                ("Model latency", inference_latency),
+                ("CPU / RAM", cpu_ram),
+                ("Compute", compute_backend),
+                ("NPU", npu_text),
+                ("NPU TOPS", npu_tops),
+            ],
+            (left_x, 84, column_width, 294),
+            (255, 184, 72),
+            ui_scale=ui_scale,
+        )
+        _draw_dashboard_card(
+            canvas,
+            "DRIVER & EYES",
+            [
+                ("Driver", values.get("Driver face", "UNKNOWN")),
+                ("Face state", values.get("Driver face state", "UNKNOWN")),
+                ("Track", values.get("Driver track", "NONE")),
+                ("Face backend", values.get("Face backend", "UNKNOWN")),
+                ("Eye source", values.get("Eye runtime", "UNKNOWN")),
+                ("Eye CNN", values.get("Eye CNN", "DISABLED")),
+                ("106 evidence", values.get("106 geometry", "DISABLED")),
+                (
+                    "106 latency",
+                    _metric_text(metrics.get("landmark_106_inference_ms"), "ms"),
+                ),
+                ("Raw / effective", f"{values.get('Raw eyes', 'UNKNOWN')} / {values.get('Effective eyes', 'UNKNOWN')}"),
+                ("Openness", values.get("Eye raw/norm", "0.00 / 0.00")),
+                ("Visibility", values.get("Eye visibility", "0.00")),
+                ("Closure", f"{values.get('Closure ms', '0')} ms"),
+                ("PERCLOS", values.get("PERCLOS 5s/60s", "0.00 / 0.00")),
+                ("Drowsiness", values.get("Drowsiness", "UNKNOWN")),
+            ],
+            (right_x, 84, column_width, 366),
+            (78, 214, 160),
+            ui_scale=ui_scale,
+        )
+        _draw_dashboard_card(
+            canvas,
+            "HEAD & ROAD",
+            [
+                ("Head angle", values.get("Head angle", "UNKNOWN")),
+                ("Raw / relative", values.get("Head raw/rel", "UNKNOWN")),
+                ("Gaze", values.get("Gaze", "UNKNOWN")),
+                ("Confidence", values.get("Gaze confidence", "0.00")),
+                ("Road calibration", values.get("Road calib", "NOT_CALIBRATED")),
+                ("Road source", values.get("Road source", "DEFAULT")),
+                ("Road offsets", values.get("Road offsets", "0.0 / 0.0")),
+                ("Attention", values.get("Attention", "UNKNOWN")),
+                ("Distraction", values.get("Distraction", "UNKNOWN")),
+            ],
+            (left_x, 464, logical_width - margin * 2, 230),
+            (104, 164, 255),
+            value_fraction=0.78,
+            ui_scale=ui_scale,
+        )
+        _draw_dashboard_card(
+            canvas,
+            "VEHICLE & CABIN",
+            [
+                ("Speed", values.get("Vehicle speed", "0.0 km/h")),
+                ("DMS gate", values.get("Vehicle gate", "UNKNOWN")),
+                ("Indicators", values.get("Indicators", "L=OFF R=OFF")),
+                ("Cabin backend", values.get("Cabin backend", "dummy")),
+                ("Cabin status", values.get("Cabin status", "UNKNOWN")),
+                ("Occupants", values.get("Occupancy", "0")),
+                ("Phone", values.get("Cabin phone obs", "NO")),
+                ("Seat belt", values.get("Cabin belt", "UNKNOWN")),
+                ("Smoking", values.get("Cabin smoking", "UNKNOWN")),
+            ],
+            (left_x, 708, logical_width - margin * 2, 144),
+            (190, 122, 255),
+            columns=2,
+            ui_scale=ui_scale,
+        )
+        _draw_dashboard_card(
+            canvas,
+            "LIVE DECISION",
+            [
+                ("HMI", values.get("HMI banner", "DMS MONITOR")),
+                ("Availability", values.get("Availability", "UNKNOWN")),
+                ("Attention", values.get("Attention", "UNKNOWN")),
+                ("Risk", values.get("Risk", "UNKNOWN")),
+            ],
+            (left_x, 866, logical_width - margin * 2, 120),
+            header_color,
+            value_fraction=0.77,
+            ui_scale=ui_scale,
+        )
         return canvas
 
-    def render_vehicle_monitor(self, state: DMSState, width: int = 520, height: int = 260) -> np.ndarray:
+    def render_vehicle_monitor(
+        self,
+        state: DMSState,
+        width: int = 520,
+        height: int = 320,
+        runtime_metrics: dict[str, object] | None = None,
+        compute_backend: str = "CPU",
+        npu_active: bool = False,
+    ) -> np.ndarray:
         canvas = np.zeros((height, width, 3), dtype=np.uint8)
-        canvas[:] = (20, 22, 24)
-        cv2.rectangle(canvas, (0, 0), (width, 48), (80, 120, 140), -1)
+        canvas[:] = (18, 21, 27)
+        ui_scale = max(0.66, min(width / 780.0, height / 390.0))
+        logical_width = int(round(width / ui_scale))
+        cv2.rectangle(
+            canvas,
+            (0, 0),
+            (width, int(round(58 * ui_scale))),
+            (128, 111, 72),
+            -1,
+        )
         cv2.putText(
             canvas,
             "IND-VIAS Vehicle Monitor",
-            (18, 32),
+            (int(round(20 * ui_scale)), int(round(38 * ui_scale))),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.75,
-            BLACK,
-            2,
+            0.72 * ui_scale,
+            WHITE,
+            max(1, int(round(2 * ui_scale))),
+            cv2.LINE_AA,
         )
-        rows = vehicle_monitor_lines(state)
-        y = 70
-        for label, value in rows:
-            cv2.putText(canvas, label, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.44, GRAY, 1)
-            cv2.putText(canvas, value[:42], (168, y), cv2.FONT_HERSHEY_SIMPLEX, 0.46, WHITE, 1)
-            y += 24
+        metrics = dict(runtime_metrics or {})
+        left_rows = [
+            ("Speed", f"{state.vehicle.ego_vehicle_speed_kph:.1f} km/h"),
+            ("DMS gate", state.vehicle.dms_speed_gate_state),
+            ("Alerts", "ENABLED" if state.vehicle.dms_alerts_enabled else "SUPPRESSED"),
+            ("Indicators", f"L={'ON' if state.vehicle.left_indicator_on else 'OFF'} R={'ON' if state.vehicle.right_indicator_on else 'OFF'}"),
+        ]
+        right_rows = [
+            ("Feature latency", _metric_text(metrics.get("feature_latency_ms", metrics.get("frame_latency_ms")), "ms")),
+            ("Processing", _metric_text(metrics.get("processing_fps"), " FPS")),
+            ("Compute", compute_backend),
+            ("NPU / TOPS", f"{'ACTIVE' if npu_active else 'OFF'} / {_npu_tops_text(metrics, npu_active)}"),
+        ]
+        half = (logical_width - 36) // 2
+        _draw_dashboard_card(
+            canvas,
+            "VEHICLE",
+            left_rows,
+            (12, 70, half, 142),
+            (255, 184, 72),
+            ui_scale=ui_scale,
+        )
+        _draw_dashboard_card(
+            canvas,
+            "PERFORMANCE",
+            right_rows,
+            (24 + half, 70, half, 142),
+            (104, 164, 255),
+            ui_scale=ui_scale,
+        )
+        _draw_dashboard_card(
+            canvas,
+            "HMI",
+            [("Decision", state.vehicle.hmi_banner_text or state.dms_v02.final_banner)],
+            (12, 222, logical_width - 24, 156),
+            status_color(state.driver_availability.state),
+            value_fraction=0.80,
+            ui_scale=ui_scale,
+        )
         return canvas
 
     def _draw_occupant_boxes(
@@ -174,26 +387,49 @@ class OverlayRenderer:
                 continue
             if tracked.selected_as_driver:
                 color = GREEN
-            elif tracked.zone == "FRONT_PASSENGER":
-                color = (0, 220, 255)
             else:
-                color = (255, 180, 40)
+                color = (255, 190, 60)
             cv2.rectangle(frame, box[:2], box[2:], color, 2)
-            cv2.putText(
-                frame,
-                occupant_label(
-                    tracked.zone,
-                    tracked.track_id,
-                    tracked.selected_as_driver,
-                    state.driver_identity.driver_session_id,
-                    show_track_id,
-                ),
-                (box[0], max(20, box[1] - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                color,
-                2,
+            label = occupant_label(
+                tracked.zone,
+                tracked.track_id,
+                tracked.selected_as_driver,
+                state.driver_identity.driver_session_id,
+                show_track_id,
             )
+            self._draw_box_label(frame, box, label, color)
+
+    @staticmethod
+    def _draw_box_label(
+        frame: np.ndarray,
+        box: tuple[int, int, int, int],
+        label: str,
+        color: tuple[int, int, int],
+    ) -> None:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.50
+        thickness = 1
+        (text_w, text_h), baseline = cv2.getTextSize(label, font, scale, thickness)
+        x = max(0, box[0])
+        label_bottom = max(text_h + baseline + 8, box[1])
+        label_top = max(0, label_bottom - text_h - baseline - 8)
+        cv2.rectangle(
+            frame,
+            (x, label_top),
+            (min(frame.shape[1] - 1, x + text_w + 12), label_bottom),
+            color,
+            -1,
+        )
+        cv2.putText(
+            frame,
+            label,
+            (x + 6, label_bottom - baseline - 4),
+            font,
+            scale,
+            BLACK,
+            thickness,
+            cv2.LINE_AA,
+        )
 
     def _draw_norm_roi(
         self,
@@ -333,11 +569,218 @@ class OverlayRenderer:
         for i, text in enumerate(lines):
             cv2.putText(frame, text, (12, 26 + i * 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, WHITE, 1)
 
+    def _add_pose_instrument_strip(
+        self,
+        frame: np.ndarray,
+        state: DMSState,
+        head_pose: HeadPose,
+        *,
+        draw_pose_axes: bool,
+        draw_gaze_vector: bool,
+    ) -> np.ndarray:
+        """Put head orientation beside the camera image, not on the face."""
+
+        height, width = frame.shape[:2]
+        canvas = np.zeros(
+            (height, width + VIDEO_SIDEBAR_WIDTH, 3),
+            dtype=np.uint8,
+        )
+        canvas[:] = (18, 21, 27)
+        canvas[:, VIDEO_SIDEBAR_WIDTH:] = frame
+        cv2.rectangle(
+            canvas,
+            (VIDEO_SIDEBAR_WIDTH - 2, 0),
+            (VIDEO_SIDEBAR_WIDTH - 1, height - 1),
+            (67, 76, 90),
+            -1,
+        )
+        cv2.putText(
+            canvas,
+            "3D HEAD POSE",
+            (14, 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.50,
+            (230, 235, 241),
+            1,
+            cv2.LINE_AA,
+        )
+
+        if draw_pose_axes:
+            self._draw_pose_instrument_axis(canvas, head_pose)
+        else:
+            cv2.putText(
+                canvas,
+                "AXIS DISABLED",
+                (28, 104),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                GRAY,
+                1,
+                cv2.LINE_AA,
+            )
+
+        text_y = min(height - 154, 176)
+        text_y = max(126, text_y)
+        values = (
+            f"Yaw    {head_pose.yaw_deg:+6.1f} deg",
+            f"Pitch  {head_pose.pitch_deg:+6.1f} deg",
+            f"Roll   {head_pose.roll_deg:+6.1f} deg",
+        )
+        for index, text in enumerate(values):
+            cv2.putText(
+                canvas,
+                text,
+                (14, text_y + index * 22),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.43,
+                (229, 234, 241),
+                1,
+                cv2.LINE_AA,
+            )
+
+        legend_y = text_y + 78
+        legend = (
+            ("R / X", "LATERAL", (0, 70, 255)),
+            ("G / Y", "VERTICAL", (40, 220, 70)),
+            ("B / Z", "DEPTH", (255, 120, 40)),
+        )
+        for index, (axis, meaning, color) in enumerate(legend):
+            y = legend_y + index * 21
+            if y >= height - 20:
+                break
+            cv2.putText(
+                canvas,
+                axis,
+                (14, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.39,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                canvas,
+                meaning,
+                (70, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.36,
+                (192, 201, 213),
+                1,
+                cv2.LINE_AA,
+            )
+
+        if draw_gaze_vector and height >= 344:
+            cv2.putText(
+                canvas,
+                f"GAZE  {state.gaze.zone.value}",
+                (14, height - 16),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.43,
+                (255, 205, 80),
+                1,
+                cv2.LINE_AA,
+            )
+        return canvas
+
+    @staticmethod
+    def _draw_pose_instrument_axis(
+        canvas: np.ndarray,
+        head_pose: HeadPose,
+    ) -> None:
+        origin = np.asarray((VIDEO_SIDEBAR_WIDTH // 2, 100), dtype=np.float64)
+        cv2.circle(
+            canvas,
+            (int(origin[0]), int(origin[1])),
+            48,
+            (47, 54, 65),
+            1,
+            cv2.LINE_AA,
+        )
+        if head_pose.confidence < 0.3 or head_pose.rvec is None:
+            cv2.putText(
+                canvas,
+                "NO POSE",
+                (62, 104),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                GRAY,
+                1,
+                cv2.LINE_AA,
+            )
+            return
+
+        rotation, _ = cv2.Rodrigues(head_pose.rvec)
+        axes = (
+            (rotation @ np.asarray((1.0, 0.0, 0.0)), (0, 70, 255), "X"),
+            (rotation @ np.asarray((0.0, 1.0, 0.0)), (40, 220, 70), "Y"),
+            (rotation @ np.asarray((0.0, 0.0, 1.0)), (255, 120, 40), "Z"),
+        )
+        for vector, color, label in axes:
+            # Orthographic instrument view with a small depth component. This
+            # visualizes the same solvePnP rotation without using face pixels.
+            endpoint = origin + np.asarray(
+                (
+                    vector[0] * 44.0 + vector[2] * 13.0,
+                    -vector[1] * 44.0 + vector[2] * 13.0,
+                )
+            )
+            end = (int(round(endpoint[0])), int(round(endpoint[1])))
+            cv2.arrowedLine(
+                canvas,
+                (int(origin[0]), int(origin[1])),
+                end,
+                color,
+                2,
+                cv2.LINE_AA,
+                tipLength=0.18,
+            )
+            cv2.putText(
+                canvas,
+                label,
+                (end[0] + 3, end[1] - 3),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.37,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
     def _draw_banner(self, frame: np.ndarray, state: DMSState) -> None:
         label, status = self._stable_banner(state)
         color = status_color(status)
         cv2.rectangle(frame, (0, 0), (frame.shape[1], 34), color, -1)
         cv2.putText(frame, label, (20, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.75, BLACK, 2)
+
+    def _add_video_header(self, frame: np.ndarray, state: DMSState) -> np.ndarray:
+        """Render the HMI above the camera image without hiding video pixels."""
+
+        label, status = self._stable_banner(state)
+        color = status_color(status)
+        height, width = frame.shape[:2]
+        canvas = np.zeros((height + VIDEO_HEADER_HEIGHT, width, 3), dtype=np.uint8)
+        canvas[:VIDEO_HEADER_HEIGHT] = color
+        canvas[VIDEO_HEADER_HEIGHT:] = frame
+        cv2.rectangle(
+            canvas,
+            (0, VIDEO_HEADER_HEIGHT - 2),
+            (width - 1, VIDEO_HEADER_HEIGHT - 1),
+            (28, 32, 38),
+            -1,
+        )
+        cv2.circle(canvas, (20, VIDEO_HEADER_HEIGHT // 2), 7, (24, 28, 34), -1)
+        cv2.circle(canvas, (20, VIDEO_HEADER_HEIGHT // 2), 3, WHITE, -1)
+        fitted_label = _fit_text(label, max(40, width - 58), 0.66, 2)
+        cv2.putText(
+            canvas,
+            fitted_label,
+            (38, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.66,
+            BLACK,
+            2,
+            cv2.LINE_AA,
+        )
+        return canvas
 
     def _stable_banner(self, state: DMSState) -> tuple[str, object]:
         label, status = banner_decision(state)
@@ -430,15 +873,36 @@ def status_dashboard_lines(
     camera_mount_position: str = "DASHBOARD_FRONT",
     camera_view_direction: str = "CABIN_REARWARD",
     driver_roi_state: str = "AUTO_LEFT",
+    eye_runtime_source: str = "LANDMARK_EAR",
+    eye_model_status: str = "DISABLED",
+    landmark_106_status: str = "DISABLED",
+    runtime_metrics: dict[str, object] | None = None,
+    compute_backend: str = "CPU",
+    npu_active: bool = False,
 ) -> list[tuple[str, str]]:
+    metrics = dict(runtime_metrics or {})
     return [
         ("FPS", f"{fps:.1f}"),
+        ("Compute", compute_backend),
+        ("NPU", "ACTIVE" if npu_active else "NOT ACTIVE"),
+        ("NPU TOPS", _npu_tops_text(metrics, npu_active)),
+        (
+            "Feature latency",
+            _metric_text(
+                metrics.get("feature_latency_ms", metrics.get("frame_latency_ms")),
+                "ms",
+            ),
+        ),
+        ("Inference latency", _metric_text(metrics.get("inference_time_ms"), "ms")),
         ("Camera health", state.dms_health.camera_status.value),
         ("Face detection", state.dms_health.face_detection_status.value),
         ("Face backend", state.dms_health.face_backend),
         ("NIR mode", state.dms_health.nir_mode),
         ("Input mode", state.dms_health.input_color_mode),
         ("Threshold profile", state.dms_health.active_eye_threshold_profile),
+        ("Eye runtime", eye_runtime_source),
+        ("Eye CNN", eye_model_status),
+        ("106 geometry", landmark_106_status),
         ("NIR active", "YES" if state.dms_health.nir_preprocessing_active else "NO"),
         ("NIR reason", ",".join(state.dms_health.nir_reason_codes) or "NONE"),
         ("Face proposals", str(state.dms_health.face_proposals)),
@@ -601,6 +1065,243 @@ def status_dashboard_lines(
         ("Readiness", f"{state.driver_readiness_score.score_0_to_1:.2f}"),
         ("Risk", state.driver_readiness_score.risk_level.value),
     ]
+
+
+def _draw_dashboard_card(
+    canvas: np.ndarray,
+    title: str,
+    rows: list[tuple[str, str]],
+    rect: tuple[int, int, int, int],
+    accent: tuple[int, int, int],
+    *,
+    value_fraction: float = 0.62,
+    columns: int = 1,
+    ui_scale: float = 1.0,
+) -> None:
+    x, y, width, height = (
+        int(round(value * ui_scale))
+        for value in rect
+    )
+    x2 = min(canvas.shape[1] - 1, x + width)
+    y2 = min(canvas.shape[0] - 1, y + height)
+    cv2.rectangle(canvas, (x, y), (x2, y2), (27, 32, 40), -1)
+    cv2.rectangle(canvas, (x, y), (x2, y2), (54, 63, 76), 1)
+    cv2.rectangle(canvas, (x, y), (x + 4, y2), accent, -1)
+    cv2.putText(
+        canvas,
+        title,
+        (x + int(round(16 * ui_scale)), y + int(round(26 * ui_scale))),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.53 * ui_scale,
+        accent,
+        max(1, int(round(ui_scale))),
+        cv2.LINE_AA,
+    )
+    if not rows:
+        return
+    columns = max(1, min(int(columns), len(rows)))
+    rows_per_column = int(np.ceil(len(rows) / columns))
+    available = max(
+        1,
+        y2 - (y + int(round(44 * ui_scale))) - int(round(8 * ui_scale)),
+    )
+    line_height = min(
+        int(round(24 * ui_scale)),
+        max(int(round(18 * ui_scale)), available // rows_per_column),
+    )
+    inner_width = max(1, width - int(round(20 * ui_scale)))
+    column_width = inner_width // columns
+    for index, (label, value) in enumerate(rows):
+        column_index = index // rows_per_column
+        row_index = index % rows_per_column
+        column_x = x + int(round(10 * ui_scale)) + column_index * column_width
+        label_width = max(
+            int(round(88 * ui_scale)),
+            int(column_width * (1.0 - value_fraction)),
+        )
+        value_x = column_x + label_width
+        value_width = max(
+            int(round(20 * ui_scale)),
+            column_x + column_width - value_x - int(round(8 * ui_scale)),
+        )
+        row_y = y + int(round(50 * ui_scale)) + row_index * line_height
+        if row_y > y2 - 7:
+            continue
+        cv2.putText(
+            canvas,
+            str(label),
+            (column_x + int(round(6 * ui_scale)), row_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40 * ui_scale,
+            (164, 174, 188),
+            max(1, int(round(ui_scale))),
+            cv2.LINE_AA,
+        )
+        value_text = _fit_text(
+            str(value),
+            value_width,
+            0.43 * ui_scale,
+            max(1, int(round(ui_scale))),
+        )
+        cv2.putText(
+            canvas,
+            value_text,
+            (value_x, row_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.43 * ui_scale,
+            (242, 246, 250),
+            max(1, int(round(ui_scale))),
+            cv2.LINE_AA,
+        )
+
+
+def _draw_compact_dashboard(
+    canvas: np.ndarray,
+    rows: list[tuple[str, str]],
+    *,
+    top: int,
+) -> None:
+    y = top
+    label_x = 16
+    value_x = max(158, int(canvas.shape[1] * 0.36))
+    max_value_width = max(40, canvas.shape[1] - value_x - 14)
+    for label, value in rows:
+        if y > canvas.shape[0] - 12:
+            break
+        cv2.putText(
+            canvas,
+            label,
+            (label_x, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.43,
+            (166, 176, 190),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            canvas,
+            _fit_text(str(value), max_value_width, 0.46, 1),
+            (value_x, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.46,
+            WHITE,
+            1,
+            cv2.LINE_AA,
+        )
+        y += 23
+
+
+def _fit_text(text: str, max_width: int, scale: float, thickness: int) -> str:
+    if cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)[0][0] <= max_width:
+        return text
+    suffix = "..."
+    candidate = text
+    while candidate:
+        candidate = candidate[:-1]
+        clipped = candidate.rstrip() + suffix
+        if cv2.getTextSize(clipped, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)[0][0] <= max_width:
+            return clipped
+    return suffix
+
+
+def _metric_text(value: object, suffix: str = "") -> str:
+    if value is None:
+        return "--"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not np.isfinite(number):
+        return "--"
+    precision = 1 if abs(number) < 100.0 else 0
+    return f"{number:.{precision}f}{suffix}"
+
+
+def _cpu_ram_text(metrics: dict[str, object]) -> str:
+    cpu = _metric_text(metrics.get("cpu_percent"), "%")
+    ram = _metric_text(metrics.get("ram_mb"), " MB")
+    return f"{cpu} / {ram}"
+
+
+def _npu_tops_text(metrics: dict[str, object], npu_active: bool) -> str:
+    if not npu_active:
+        return "0.00 (inactive)"
+    actual = metrics.get("npu_tops_utilized")
+    if actual is None:
+        return "UNAVAILABLE"
+    return _metric_text(actual, " TOPS")
+
+
+_STATUS_DASHBOARD_PRIORITY = (
+    "FPS",
+    "Compute",
+    "NPU",
+    "NPU TOPS",
+    "Feature latency",
+    "Inference latency",
+    "Camera health",
+    "Face detection",
+    "Face backend",
+    "NIR mode",
+    "Input mode",
+    "Threshold profile",
+    "NIR active",
+    "NIR reason",
+    "Face proposals",
+    "Face det conf",
+    "Driver face",
+    "Driver face state",
+    "Proposal state",
+    "Track hold",
+    "Eye runtime",
+    "Eye CNN",
+    "106 geometry",
+    "Raw eyes",
+    "Effective eyes",
+    "Eye raw/norm",
+    "Eye visibility",
+    "Closure ms",
+    "PERCLOS usable",
+    "PERCLOS 5s/60s",
+    "Drowsiness",
+    "Head angle",
+    "Head raw/rel",
+    "Gaze",
+    "Gaze confidence",
+    "Road calib",
+    "Road source",
+    "Road offsets",
+    "Vehicle gate",
+    "Vehicle speed",
+    "Indicators",
+    "Cabin backend",
+    "Cabin status",
+    "Cabin objects",
+    "Cabin phone obs",
+    "Phone scenario",
+    "Cabin belt",
+    "Cabin smoking",
+    "HMI banner",
+)
+
+
+def _prioritize_status_dashboard_lines(
+    rows: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Put vehicle-test safety signals above diagnostic detail.
+
+    The complete row collection is retained after the visible priority block,
+    so callers that render a taller canvas do not lose any telemetry.
+    """
+
+    by_label = {label: (label, value) for label, value in rows}
+    priority = [
+        by_label[label]
+        for label in _STATUS_DASHBOARD_PRIORITY
+        if label in by_label
+    ]
+    priority_labels = set(_STATUS_DASHBOARD_PRIORITY)
+    return priority + [row for row in rows if row[0] not in priority_labels]
 
 
 def vehicle_monitor_lines(state: DMSState) -> list[tuple[str, str]]:
@@ -794,10 +1495,11 @@ def occupant_label(
     driver_session_id: str | None = None,
     show_track_id: bool = False,
 ) -> str:
-    if selected_as_driver and driver_session_id:
-        return f"DRIVER {driver_session_id} / T{track_id}" if show_track_id else f"DRIVER {driver_session_id}"
-    label_zone = "DRIVER" if selected_as_driver else zone
-    return f"{label_zone} T{track_id}"
+    if selected_as_driver:
+        label = f"DRIVER {driver_session_id}" if driver_session_id else "DRIVER"
+    else:
+        label = "PASSENGER"
+    return f"{label} / T{track_id}" if show_track_id else label
 
 
 def clamp_endpoint(
@@ -821,7 +1523,3 @@ def clamp_endpoint(
     ex = min(max(0, int(round(ex))), width - 1)
     ey = min(max(0, int(round(ey))), height - 1)
     return ex, ey
-
-
-
-

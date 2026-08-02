@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from ind_vias_dms.core.config import DMSConfig
+from ind_vias_dms.utils.mediapipe_loader import load_mediapipe_solutions
 from ind_vias_dms.vision.face_proposals import FaceProposal, FaceProposalDetector, expand_box
 from ind_vias_dms.vision.nir_preprocess import preprocess_for_face_detection
 
@@ -67,7 +68,7 @@ class FaceLandmarkBackend:
         if backend != "mediapipe":
             raise ValueError(f"Unsupported DMS face backend: {backend}")
         try:
-            import mediapipe as mp  # type: ignore
+            mp = load_mediapipe_solutions()
         except ImportError as exc:
             raise RuntimeError(MEDIAPIPE_REQUIRED_MESSAGE) from exc
         self._mp_face_mesh = mp.solutions.face_mesh

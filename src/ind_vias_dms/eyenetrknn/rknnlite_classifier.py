@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import cv2
 import numpy as np
-from rknnlite.api import RKNNLite
 
 
 EYENET_CLASSES = [
-    "bad_crop",
     "eye_closed",
     "eye_open",
 ]
@@ -29,6 +28,8 @@ class EyeNetRKNNLiteClassifier:
     def __init__(
         self,
         model_path: str,
+        metadata_path: str | None = None,
+        class_names: list[str] | None = None,
         img_size: int = 96,
         input_color: str = "bgr",
         enhance: bool = True,
@@ -38,6 +39,8 @@ class EyeNetRKNNLiteClassifier:
         clahe_clip: float = 3.0,
     ):
         self.model_path = Path(model_path)
+        self.metadata_path = Path(metadata_path) if metadata_path else None
+        self.class_names = list(class_names or EYENET_CLASSES)
         self.img_size = img_size
         self.input_color = input_color.lower()
 
@@ -49,6 +52,17 @@ class EyeNetRKNNLiteClassifier:
 
         if not self.model_path.exists():
             raise FileNotFoundError(f"EyeNet RKNN model not found: {self.model_path}")
+
+        self._load_metadata()
+        if len(self.class_names) < 2:
+            raise ValueError("EyeNet RKNN requires at least two ordered class names")
+
+        try:
+            from rknnlite.api import RKNNLite
+        except ImportError as exc:
+            raise RuntimeError(
+                "rknnlite is required only when the RKNN backend is selected"
+            ) from exc
 
         self.rknn = RKNNLite()
 
@@ -143,17 +157,36 @@ class EyeNetRKNNLiteClassifier:
 
         logits = outputs[0].reshape(-1)
         probs = self._softmax(logits)
+        if len(probs) != len(self.class_names):
+            raise RuntimeError(
+                f"RKNN output has {len(probs)} classes, metadata defines "
+                f"{len(self.class_names)}"
+            )
 
         pred_idx = int(np.argmax(probs))
-        pred_class = EYENET_CLASSES[pred_idx]
+        pred_class = self.class_names[pred_idx]
         confidence = float(probs[pred_idx])
 
         prob_dict = {
             cls: float(prob)
-            for cls, prob in zip(EYENET_CLASSES, probs)
+            for cls, prob in zip(self.class_names, probs)
         }
 
         return pred_class, confidence, prob_dict
 
     def release(self):
         self.rknn.release()
+
+    def _load_metadata(self) -> None:
+        if self.metadata_path is None or not self.metadata_path.is_file():
+            return
+        payload: dict[str, Any] = json.loads(
+            self.metadata_path.read_text(encoding="utf-8")
+        )
+        class_to_idx = payload.get("class_to_idx", {})
+        if isinstance(class_to_idx, dict) and class_to_idx:
+            ordered = sorted(class_to_idx.items(), key=lambda item: int(item[1]))
+            self.class_names = [str(label) for label, _ in ordered]
+        image_size = payload.get("img_size", payload.get("input_size"))
+        if isinstance(image_size, int) and image_size > 0:
+            self.img_size = image_size

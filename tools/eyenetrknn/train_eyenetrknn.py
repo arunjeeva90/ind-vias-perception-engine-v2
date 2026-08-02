@@ -15,10 +15,11 @@ from ind_vias_dms.eyenetrknn.model import build_eyenetrknn_model
 
 
 CLASSES = [
-    "bad_crop",
     "eye_closed",
     "eye_open",
 ]
+MEAN = [0.485, 0.456, 0.406]
+STD = [0.229, 0.224, 0.225]
 
 
 def parse_args():
@@ -29,7 +30,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--img-size", type=int, default=96)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pretrained", action="store_true")
     return parser.parse_args()
 
@@ -58,8 +59,8 @@ def build_loaders(data_dir: Path, img_size: int, batch_size: int, num_workers: i
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.ToTensor(),
             transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
+                mean=MEAN,
+                std=STD,
             ),
         ]
     )
@@ -69,8 +70,8 @@ def build_loaders(data_dir: Path, img_size: int, batch_size: int, num_workers: i
             transforms.Resize((img_size, img_size)),
             transforms.ToTensor(),
             transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
+                mean=MEAN,
+                std=STD,
             ),
         ]
     )
@@ -81,6 +82,14 @@ def build_loaders(data_dir: Path, img_size: int, batch_size: int, num_workers: i
     print("Train images:", len(train_ds))
     print("Val images:", len(val_ds))
     print("Class mapping:", train_ds.class_to_idx)
+    expected = {name: index for index, name in enumerate(CLASSES)}
+    if train_ds.class_to_idx != expected:
+        raise ValueError(
+            f"Expected the reviewed binary class map {expected}, got "
+            f"{train_ds.class_to_idx}. Do not add a synthetic bad_crop class."
+        )
+    if val_ds.class_to_idx != train_ds.class_to_idx:
+        raise ValueError("Training and validation class maps differ")
 
     train_loader = DataLoader(
         train_ds,
@@ -140,6 +149,12 @@ def run_epoch(model, loader, criterion, optimizer, device, train: bool):
 
 def main():
     args = parse_args()
+    raise RuntimeError(
+        "This ImageFolder trainer is retained for implementation history but "
+        "disabled to prevent legacy dataset mixing. Use "
+        "tools/dms_models/train_classifier.py with the verified prepared "
+        "manifest and --task eye_state."
+    )
 
     data_dir = Path(args.data)
     out_dir = Path(args.out)
@@ -160,7 +175,17 @@ def main():
         pretrained=args.pretrained,
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+    class_counts = torch.bincount(
+        torch.tensor(train_loader.dataset.targets),
+        minlength=len(class_to_idx),
+    ).float()
+    class_weights = len(train_loader.dataset) / (
+        len(class_to_idx) * class_counts.clamp_min(1.0)
+    )
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights.to(device),
+        label_smoothing=0.05,
+    )
 
     optimizer = optim.AdamW(
         model.parameters(),
@@ -179,6 +204,9 @@ def main():
         "img_size": args.img_size,
         "class_to_idx": class_to_idx,
         "idx_to_class": {v: k for k, v in class_to_idx.items()},
+        "mean": MEAN,
+        "std": STD,
+        "class_weights": class_weights.tolist(),
     }
 
     with open(out_dir / "metadata.json", "w") as f:
@@ -216,6 +244,10 @@ def main():
         ckpt = {
             "model_state": model.state_dict(),
             "metadata": metadata,
+            "class_to_idx": class_to_idx,
+            "img_size": args.img_size,
+            "mean": MEAN,
+            "std": STD,
             "epoch": epoch,
             "val_acc": val_acc,
         }

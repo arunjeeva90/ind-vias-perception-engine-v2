@@ -4,22 +4,29 @@
 #
 # This config is derived from dualsight_dms_v0_1.yaml with adjustments
 # for CPU-constrained operation on the AXON board:
-#   - Reduced frame_resize_width (640) for faster CPU processing
+#   - Reduced frame_resize_width (480) for faster CPU processing
 #   - Same DMS behavioral parameters as v0.2.9 baseline
 #   - No seatbelt heuristic logic
-#   - No RKNN/NPU acceleration (future work)
+#   - Qualified RKNN artefacts remain available as explicit, model-specific
+#     tools; the integrated MediaPipe DMS path remains CPU until a validated
+#     drop-in RKNN face/landmark backend is completed.
 #   - Compatible with USB webcam and video file input
 #
 # Usage:
 #   python apps/run_dms_demo.py --config configs/dms/dualsight_dms_axon.yaml ...
 #
-# TODO (future): Add RKNN/NPU inference backend settings for hardware acceleration
+# RKNN policy: never substitute a converted model merely because it loads.
+# Only models that pass task accuracy, ONNX/RKNN parity, and AXON latency gates
+# may be selected by the integrated runtime.
 # TODO (future): Add thermal throttle monitoring parameters
 # TODO (future): Tune face_detection_upscale for NPU-accelerated face detection
 
 # --- Face Detection ---
 face_backend: mediapipe
-max_num_faces: 1
+# Direct FaceMesh detects multiple faces. Only the selected largest/nearest
+# driver face is used for landmark, eye, head-pose, and temporal DMS decisions;
+# all remaining validated faces are rendered as passenger boxes.
+max_num_faces: 4
 nir_mode: auto
 enable_nir_preprocessing: false
 nir_clahe_enabled: false
@@ -41,7 +48,12 @@ enable_strict_driver_face_validation: false
 face_proposal_backend: mediapipe_face_detection
 face_proposal_model_selection: 1
 face_proposal_min_confidence: 0.35
-face_mesh_on_crops: true
+# Mounted-driver vehicle profile: direct FaceMesh avoided a second face
+# detector/crop pass and measured ~30 ms inference on the approved AXON
+# regression frames versus ~200 ms with proposal + crop, while retaining
+# 15/15 face presence in the bounded comparison. Proposal code remains intact
+# and can be re-enabled for wide-cabin/multi-occupant evaluation.
+face_mesh_on_crops: false
 face_crop_margin: 0.25
 face_crop_min_size_px: 80
 face_crop_upscale: 1.0
@@ -83,7 +95,8 @@ runtime:
   latest_frame_buffer: true
   opencl: false
 performance:
-  show_perf: true
+  # Performance belongs in the status/vehicle consoles, never over the camera.
+  show_perf: false
   model_gops_per_frame: 0.0
   estimate_tops: true
 
@@ -99,7 +112,7 @@ speed_adjust_step_kph: 1
 speed_adjust_fast_step_kph: 5
 dms_activation_banner_ms: 2000
 standby_suppresses_alerts: true
-vehicle_monitor_window_enabled: false
+vehicle_monitor_window_enabled: true
 indicator_sim_enabled: true
 
 # --- Mirror Check ---
@@ -165,7 +178,10 @@ phone_confirmed_ms: 1500
 phone_posture_hold_ms: 1200
 phone_recovery_stable_ms: 1000
 prefer_distraction_banner_for_phone: true
-mobile_distraction_enabled: true
+# Phone/hand inference is deferred for this head-pose/eye-state vehicle phase.
+# The full MediaPipe Hands posture implementation remains in source and the
+# retained phone baseline remains explicitly opt-in in the launch scripts.
+mobile_distraction_enabled: false
 phone_to_ear_sustain_ms: 700
 phone_to_ear_face_side_roi_expand: 0.35
 phone_to_ear_hand_distance_threshold_norm: 0.18
@@ -291,8 +307,8 @@ drowsiness_warning_release_ms: 1200
 # --- Overlay ---
 max_axis_length_px: 80
 max_gaze_vector_length_px: 100
-draw_pose_axes: false
-draw_gaze_vector: false
+draw_pose_axes: true
+draw_gaze_vector: true
 
 # --- Vehicle Layout ---
 vehicle_layout: RHD
@@ -308,6 +324,10 @@ front_row_face_min_area_norm: 0.015
 rear_row_face_max_area_norm: 0.012
 driver_min_front_layer_score: 0.55
 driver_min_candidate_score: 0.65
+driver_largest_face_in_roi_priority: true
+retain_non_driver_faces_in_driver_roi: true
+# Passenger faces remain visible as boxes but cannot feed landmark-based DMS.
+retain_non_driver_landmarks: false
 rear_overlap_driver_reject_threshold: 0.60
 prefer_previous_driver_track_ms: 1500
 allow_rear_face_inside_driver_roi: true
@@ -333,7 +353,10 @@ non_driver_confirm_frames: 4
 non_driver_confirm_time_ms: 300
 non_driver_require_landmarks: true
 non_driver_reject_if_landmark_count_below: 120
-non_driver_reject_static_headrest_like_boxes: true
+# Direct FaceMesh already supplies a human-face validation signal. Do not
+# discard a genuinely smaller passenger merely because its box resembles a
+# distant headrest by size/position.
+non_driver_reject_static_headrest_like_boxes: false
 non_driver_false_positive_suppression_enabled: true
 occupant_min_temporal_sustain_ms: 700
 occupant_require_landmark_validation: true
@@ -383,7 +406,7 @@ perclos_60s_medium_threshold: 0.25
 perclos_60s_high_threshold: 0.40
 
 # --- Display ---
-draw_all_faces: false
+draw_all_faces: true
 draw_only_driver_pose: true
 road_gaze_calibrated: false
 drowsiness_perclos_medium: 0.25
@@ -441,13 +464,71 @@ repeated_head_nod_warning_count: 3
 # --- Overlay Settings ---
 overlay_enabled: true
 telemetry_panel_enabled: false
-# status_window_enabled controlled by CLI --status-window flag
-status_window_enabled: false
+# The AXON vehicle-test profile restores the three-window DualSight UI:
+# video, status, and vehicle monitor. HEADLESS=1 in the launch scripts still
+# suppresses all GUI windows.
+status_window_enabled: true
 overlay_panel_embedded: true
+
+# --- Optional Reviewed-Data Classifiers ---
+eye_state_classifier:
+  enabled: false
+  model_path: models/dms_classifiers/eye_state/model.onnx
+  metadata_path: models/dms_classifiers/eye_state/model.metadata.json
+  class_names:
+    - eye_closed
+    - eye_open
+  input_size: 96
+  min_confidence: 0.70
+  # Must match the authoritative reviewed handoff crop generator.
+  crop_mode: aligned_reviewed_v1
+  crop_context_scale: 1.65
+  crop_eyebrow_shift: 0.10
+  crop_min_eye_width: 18.0
+  crop_min_blur: 12.0
+  crop_min_brightness: 18.0
+  crop_max_brightness: 235.0
+  crop_max_padding_fraction: 0.25
+  geometry_agreement_enabled: true
+  geometry_open_margin: 1.25
+  # Internal PoC only: InsightFace pretrained weights are not cleared for OEM
+  # deployment. When enabled, this validates eye geometry; it does not classify.
+  landmark_106_enabled: false
+  landmark_106_backend: rknn
+  landmark_106_model_path: models/dms/landmark_106.onnx
+  landmark_106_rknn_model_path: models/dms/landmark_106_rk3588.rknn
+  landmark_106_rknnlite_site_packages: .venv-rknn/lib/python3.10/site-packages
+  landmark_106_require_agreement: true
+  # Advisory evidence may raise confidence when the two geometries agree, but
+  # disagreement cannot override the accepted MediaPipe/EAR path until a
+  # reviewed parity/vehicle gate is completed.
+  landmark_106_advisory_only: true
+  landmark_106_max_normalized_error: 0.35
+  crop_padding_x: 0.45
+  crop_padding_y: 1.10
+  allow_missing_model: true
+
+seatbelt_detection:
+  enabled: false
+  model_path: models/dms_classifiers/seat_belt/model.onnx
+  metadata_path: models/dms_classifiers/seat_belt/model.metadata.json
+  class_names:
+    - no_seat_belt
+    - seat_belt_on
+  input_size: 224
+  min_confidence: 0.72
+  min_blur: 24.0
+  min_brightness: 25.0
+  max_brightness: 235.0
+  confirm_ms: 1200
+  allow_missing_model: true
 
 # --- Phone Object Detection ---
 phone_object_detection:
-  enabled: true
+  # Preserve this integration hook, but keep it off for the current
+  # head-pose/eye-state vehicle test. The retained COCO baseline currently uses
+  # its standalone multi-output DFL ONNX/RKNN tools.
+  enabled: false
   backend: onnx_yolo_optional
   model_path: models/weights/phone_detector.onnx
   class_names:

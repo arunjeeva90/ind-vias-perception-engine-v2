@@ -412,14 +412,71 @@ def test_auto_generated_roi_overrides_conflicting_explicit_roi():
     assert manager._roi("driver_roi_norm") == (0.0, 0.10, 0.55, 0.95)
 
 
-def test_overlay_label_formatting_uses_full_zone_and_track_id():
-    assert occupant_label("FRONT_PASSENGER", 2) == "FRONT_PASSENGER T2"
-    assert occupant_label("FRONT_PASSENGER", 2, selected_as_driver=True) == "DRIVER T2"
+def test_overlay_label_formatting_uses_driver_or_passenger_role():
+    assert occupant_label("FRONT_PASSENGER", 2) == "PASSENGER"
+    assert occupant_label("DRIVER", 2) == "PASSENGER"
+    assert occupant_label("FRONT_PASSENGER", 2, selected_as_driver=True) == "DRIVER"
     assert occupant_label("DRIVER", 4, selected_as_driver=True, driver_session_id="D1") == "DRIVER D1"
     assert (
         occupant_label("DRIVER", 4, selected_as_driver=True, driver_session_id="D1", show_track_id=True)
         == "DRIVER D1 / T4"
     )
+
+
+def test_largest_face_in_driver_roi_is_driver_and_smaller_face_is_passenger():
+    manager = CabinOccupantManager(
+        DMSConfig(
+            driver_image_side="LEFT",
+            driver_largest_face_in_roi_priority=True,
+            retain_non_driver_faces_in_driver_roi=True,
+            retain_non_driver_landmarks=False,
+            non_driver_false_positive_suppression_enabled=False,
+        )
+    )
+    larger_near_face = _face_with_landmarks((80, 180, 390, 760), confidence=0.90)
+    smaller_face = _face_with_landmarks((350, 260, 500, 520), confidence=0.92)
+
+    selection = manager.update(
+        [smaller_face, larger_near_face],
+        (1000, 1000, 3),
+        timestamp_ms=0,
+    )
+
+    assert selection.driver is not None
+    assert selection.driver.observation.bbox == larger_near_face.bbox
+    assert len(selection.faces) == 2
+    assert sum(face.selected_as_driver for face in selection.faces) == 1
+    passenger = next(face for face in selection.faces if not face.selected_as_driver)
+    assert passenger.observation.landmarks_px == {}
+    assert selection.driver.observation.landmarks_px
+    assert occupant_label(
+        passenger.zone,
+        passenger.track_id,
+        passenger.selected_as_driver,
+    ) == "PASSENGER"
+
+
+def test_face_outside_driver_roi_is_passenger_only():
+    manager = CabinOccupantManager(
+        DMSConfig(
+            driver_image_side="LEFT",
+            driver_largest_face_in_roi_priority=True,
+            non_driver_false_positive_suppression_enabled=False,
+        )
+    )
+    driver = _face_with_landmarks((80, 180, 390, 760), confidence=0.90)
+    outside_roi = _face_with_landmarks((650, 220, 900, 760), confidence=0.92)
+
+    selection = manager.update(
+        [outside_roi, driver],
+        (1000, 1000, 3),
+        timestamp_ms=0,
+    )
+
+    assert selection.driver is not None
+    passenger = next(face for face in selection.faces if not face.selected_as_driver)
+    assert passenger.zone == "FRONT_PASSENGER"
+    assert occupant_label(passenger.zone, passenger.track_id) == "PASSENGER"
 
 
 def test_status_dashboard_lines_split_cabin_camera_and_driver_face():
@@ -2628,7 +2685,44 @@ def test_webcam_raw_face_proposal_hidden_by_default():
         show_debug_proposal_boxes=False,
     )
 
-    assert np.array_equal(rendered[60:100], frame[60:100])
+    assert rendered.shape == (146, 310, 3)
+    assert np.array_equal(
+        rendered[46 + 60 : 46 + 100, 190:],
+        frame[60:100],
+    )
+
+
+def test_pose_axes_are_in_left_instrument_strip_not_on_face_pixels():
+    frame = np.zeros((360, 480, 3), dtype=np.uint8)
+    face = FaceLandmarkResult(
+        face_found=True,
+        landmarks_px={1: (240.0, 180.0)},
+    )
+    pose = HeadPose(
+        yaw_deg=15.0,
+        pitch_deg=-4.0,
+        roll_deg=2.0,
+        rvec=np.asarray([[0.08], [-0.20], [0.04]], dtype=np.float64),
+        confidence=0.8,
+    )
+
+    rendered = OverlayRenderer().draw_video_overlay(
+        frame,
+        DMSState(),
+        face,
+        pose,
+        fps=30.0,
+        draw_panel=False,
+    )
+    sidebar = rendered[46:, :190]
+    video = rendered[46:, 190:]
+
+    assert rendered.shape == (406, 670, 3)
+    assert np.any((sidebar[:, :, 2] > 200) & (sidebar[:, :, 1] < 130))
+    assert np.any((sidebar[:, :, 1] > 180) & (sidebar[:, :, 2] < 150))
+    assert np.any((sidebar[:, :, 0] > 200) & (sidebar[:, :, 1] < 170))
+    assert not np.any((video[:, :, 2] > 200) & (video[:, :, 1] < 130))
+    assert not np.any((video[:, :, 0] > 200) & (video[:, :, 1] < 170))
 
 
 def test_webcam_debug_trace_flags_unavailable_with_proposal():

@@ -65,28 +65,17 @@ fi
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-# Check for cabin ONNX model and class map
-CABIN_ONNX_ARGS=()
-MODEL_PATH="models/dms/cabin_objects.onnx"
-CLASS_MAP_PATH="configs/dms/cabin_object_class_map_coco_phone.json"
-
-if [ -f "$MODEL_PATH" ] && [ -f "$CLASS_MAP_PATH" ]; then
-    echo "[INFO] Cabin ONNX model found. Enabling ONNX cabin evidence."
-    CABIN_ONNX_ARGS=(--cabin-evidence-backend onnx --cabin-evidence-model "$MODEL_PATH" --cabin-evidence-class-map "$CLASS_MAP_PATH")
-else
-    echo "[WARN] Cabin ONNX model or class map not found."
-    echo "       Model:     $MODEL_PATH ($([ -f "$MODEL_PATH" ] && echo 'EXISTS' || echo 'MISSING'))"
-    echo "       Class map: $CLASS_MAP_PATH ($([ -f "$CLASS_MAP_PATH" ] && echo 'EXISTS' || echo 'MISSING'))"
-    echo "       Running with dummy cabin evidence backend."
-    echo ""
-    CABIN_ONNX_ARGS=(--cabin-evidence-backend dummy)
-fi
+# The retained phone baseline remains available through its standalone ONNX/RKNN
+# Model Zoo tools. Its multi-output DFL contract is not selected by the
+# integrated cabin-evidence parser in this head/eye validation phase.
+echo "[INFO] Phone detection disabled for this validation phase."
+CABIN_ONNX_ARGS=(--cabin-evidence-backend dummy)
 
 # Build display arguments
 DISPLAY_ARGS=()
 if [ "${HEADLESS:-0}" != "1" ]; then
-    DISPLAY_ARGS=(--display --status-window)
-    echo "[INFO] Display mode enabled (--display --status-window)"
+    DISPLAY_ARGS=(--display --status-window --window-layout vehicle-test)
+    echo "[INFO] DualSight three-window vehicle-test display enabled."
 else
     echo "[INFO] Headless mode (no display window)"
 fi

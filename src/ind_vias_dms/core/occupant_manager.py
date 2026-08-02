@@ -79,6 +79,13 @@ class CabinOccupantManager:
             changed = self.driver_track_id is not None and driver.track_id != self.driver_track_id
             self.driver_track_id = driver.track_id
             self.driver_last_seen_ms = timestamp_ms
+        if not self.config.retain_non_driver_landmarks:
+            for face in tracked_all:
+                if not face.selected_as_driver:
+                    # Multi-face FaceMesh landmarks are useful to validate a
+                    # human face, but passenger landmarks must not enter the
+                    # driver eye/head/gaze decision path.
+                    face.observation.landmarks_px = {}
         self.previous = tracked_all
         return OccupantSelection(
             tracked,
@@ -174,7 +181,27 @@ class CabinOccupantManager:
                 self.driver_track_id = None
             return None
         roi_center = ((driver_roi[0] + driver_roi[2]) / 2.0, (driver_roi[1] + driver_roi[3]) / 2.0)
-        candidates.sort(key=lambda face: (face.driver_candidate_score, -_norm_center_distance(face.observation.box_norm, roi_center)), reverse=True)
+        if self.config.driver_largest_face_in_roi_priority:
+            # Mounted-camera contract: among validated faces inside the driver
+            # ROI, the largest image-space face is the nearest/front driver.
+            # Candidate quality remains the tie-breaker; all non-selected faces
+            # are passengers even if their boxes also overlap the driver ROI.
+            candidates.sort(
+                key=lambda face: (
+                    _area_norm(face.observation.box_norm),
+                    face.driver_candidate_score,
+                    -_norm_center_distance(face.observation.box_norm, roi_center),
+                ),
+                reverse=True,
+            )
+        else:
+            candidates.sort(
+                key=lambda face: (
+                    face.driver_candidate_score,
+                    -_norm_center_distance(face.observation.box_norm, roi_center),
+                ),
+                reverse=True,
+            )
         return candidates[0]
 
     def _driver_candidate_score(
@@ -272,7 +299,10 @@ class CabinOccupantManager:
             if quality is None or not quality.is_valid_driver_face:
                 return False, (quality.rejection_reason_codes if quality else ["FACE_PROPOSAL_NOT_VALIDATED"])
             return True, []
-        if face.slot_reason == "REAR_LAYER_REJECTED_AS_DRIVER":
+        if (
+            face.slot_reason == "REAR_LAYER_REJECTED_AS_DRIVER"
+            and not self.config.retain_non_driver_faces_in_driver_roi
+        ):
             return False, ["REAR_LAYER_REJECTED_AS_DRIVER"]
         if face.observation.quality is None:
             return False, ["FACE_PROPOSAL_NOT_VALIDATED"]

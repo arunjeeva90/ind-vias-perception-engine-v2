@@ -40,3 +40,11 @@ models/eyenetrknn/*.onnx.data
 models/eyenetrknn/*.rknn
 models/eyenetrknn/rknn_calib_dataset.txt
 bad_images_list.txt
+
+# Local model binaries
+models/mobile_phone_detector/*.onnx
+models/mobile_phone_detector/*.rknn
+
+# Reproducible local handoff preparation and classifier training outputs
+local_data/
+models/dms_classifiers/
